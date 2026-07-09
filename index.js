@@ -160,15 +160,27 @@ client.on('interactionCreate', async interaction => {
         const decisionNumber = Math.floor(Math.random() * 1000) + 1;
         const roleId = '1144243984949055538';
 
+        let nameChanged = true;
+        let roleAdded = true;
+
+        // نحاول ندي الرول
         try {
-            // إعطاء الرول
             await member.roles.add(roleId);
-            
-            // تغيير الاسم
+        } catch (error) {
+            console.error("Couldn't add role:", error.message);
+            roleAdded = false;
+        }
+        
+        // نحاول نغير الاسم لوحده
+        try {
             await member.setNickname(newName);
+        } catch (error) {
+            console.error("Couldn't change nickname:", error.message);
+            nameChanged = false;
+        }
             
-            // الرسالة الرسمية
-            const officialMessage = `
+        // الرسالة الرسمية بتنزل عادي في كل الحالات
+        const officialMessage = `
 **🚨 مكافحة البضان والجيل المخصي 🚨**
 __بناءً على الصلاحيات الممنوحة لنا، ولأن المحتوى الرقمي الحالي وصل لمرحلة لا يمكن السكوت عليها، تقرر الآتي:__
 
@@ -187,12 +199,23 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
 
 ||@everyone||`;
 
-            await interaction.reply({ content: 'تم تنفيذ القرار بنجاح!', ephemeral: true });
+        // رسالة التنبيه للشخص اللي استخدم الكوماند
+        let replyText = 'تم تنفيذ القرار ونزول البيان!';
+        if (!nameChanged) {
+            replyText += '\n⚠️ **تنبيه:** مقدرتش أغير اسم الشخص لأن رتبته أعلى مني!';
+        }
+        if (!roleAdded) {
+            replyText += '\n⚠️ **تنبيه:** مقدرتش أديله الرول لأن رتبته أعلى مني!';
+        }
+
+        try {
+            await interaction.reply({ content: replyText, ephemeral: true });
             await interaction.channel.send(officialMessage);
-            
         } catch (error) {
-            console.error(error);
-            await interaction.reply({ content: 'حصلت مشكلة وأنا بنفذ القرار! اتأكد إن رتبة البوت أعلى من رتبة الشخص والرول اللي عايز تديهوله، وإن البوت عنده صلاحية Manage Roles و Manage Nicknames.', ephemeral: true });
+            console.error("Couldn't send messages:", error);
+            if (!interaction.replied) {
+                await interaction.reply({ content: 'حصلت مشكلة وأنا ببعت رسالة البيان!', ephemeral: true });
+            }
         }
     }
 });
