@@ -1,0 +1,281 @@
+const { Client, GatewayIntentBits, ApplicationCommandOptionType } = require('discord.js');
+const {
+    joinVoiceChannel,
+    createAudioPlayer,
+    createAudioResource,
+    NoSubscriberBehavior,
+    AudioPlayerStatus
+} = require('@discordjs/voice');
+const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+require('dotenv').config();
+
+// سيرفر ويب بسيط عشان الاستضافات المجانية (زي Render أو Koyeb) متقفلش البوت
+const express = require('express');
+const app = express();
+app.get('/', (req, res) => res.send('Bot is running!'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
+});
+
+const player = createAudioPlayer({
+    behaviors: {
+        noSubscriber: NoSubscriberBehavior.Pause,
+    },
+});
+
+let connection = null;
+let queue = [];
+let isPlaying = false;
+let currentResourceFile = null;
+
+// قائمة البلاك ليست (الأيديهات الممنوعة من استخدام البوت)
+const BLACKLIST = ['192409037772423168'];
+
+client.on('ready', async () => {
+    console.log(`Logged in as ${client.user.tag}!`);
+    
+    // تسجيل السلاش كوماند في كل السيرفرات اللي البوت فيها (أسرع من التسجيل العالمي)
+    const commandsData = [
+        {
+            name: 'punish',
+            description: 'عزل مخصي وتغيير اسمه وإعطاءه رول',
+            options: [
+                {
+                    name: 'user',
+                    type: ApplicationCommandOptionType.User,
+                    description: 'الشخص اللي عايز تعاقبه',
+                    required: true,
+                },
+                {
+                    name: 'new_name',
+                    type: ApplicationCommandOptionType.String,
+                    description: 'الاسم الجديد',
+                    required: true,
+                },
+                {
+                    name: 'reason',
+                    type: ApplicationCommandOptionType.String,
+                    description: 'سبب العقاب',
+                    required: true,
+                }
+            ]
+        }
+    ];
+
+    client.guilds.cache.forEach(async guild => {
+        try {
+            await guild.commands.set(commandsData);
+            console.log(`Registered slash commands for guild ${guild.name}`);
+        } catch (err) {
+            console.error(`Failed to register slash commands for guild ${guild.name}`, err);
+        }
+    });
+});
+
+// دالة توليد وتشغيل الصوت
+async function generateAndPlayTTS(text) {
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata('ar-EG-SalmaNeural', OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
+    
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tts-'));
+    
+    try {
+        const filePath = path.join(tmpDir, 'output.webm');
+        const result = await tts.toFile(tmpDir, text);
+        const actualFilePath = result.audioFilePath || filePath; 
+        
+        currentResourceFile = { file: actualFilePath, dir: tmpDir };
+        const resource = createAudioResource(actualFilePath);
+        player.play(resource);
+    } catch (error) {
+        console.error("TTS Error:", error);
+        processNextInQueue(); // في حالة خطأ، ننتقل للي بعده
+    } finally {
+        tts.close();
+    }
+}
+
+function processNextInQueue() {
+    if (queue.length === 0) {
+        isPlaying = false;
+        return;
+    }
+    
+    isPlaying = true;
+    const nextText = queue.shift();
+    generateAndPlayTTS(nextText);
+}
+
+// لما المقطع يخلص، نظف الملفات وشغل اللي بعده لو موجود
+player.on(AudioPlayerStatus.Idle, () => {
+    if (currentResourceFile) {
+        try {
+            if (fs.existsSync(currentResourceFile.file)) fs.unlinkSync(currentResourceFile.file);
+            if (fs.existsSync(currentResourceFile.dir)) fs.rmdirSync(currentResourceFile.dir);
+        } catch (e) {
+            console.error("Error cleaning up:", e);
+        }
+        currentResourceFile = null;
+    }
+    
+    processNextInQueue();
+});
+
+// التعامل مع الأخطاء عشان البوت ميوقفش
+player.on('error', error => {
+    console.error('Audio Player Error:', error.message);
+    processNextInQueue();
+});
+
+// التعامل مع السلاش كوماند
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+
+    if (BLACKLIST.includes(interaction.user.id)) {
+        return interaction.reply({ content: 'أنت في البلاك ليست وممنوع من استخدام البوت!', ephemeral: true });
+    }
+
+    if (interaction.commandName === 'punish') {
+        const user = interaction.options.getUser('user');
+        const newName = interaction.options.getString('new_name');
+        const reason = interaction.options.getString('reason');
+
+        const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+
+        if (!member) {
+            return interaction.reply({ content: 'مش قادر ألاقي العضو ده في السيرفر!', ephemeral: true });
+        }
+
+        const decisionNumber = Math.floor(Math.random() * 1000) + 1;
+        const roleId = '1144243984949055538';
+
+        try {
+            // إعطاء الرول
+            await member.roles.add(roleId);
+            
+            // تغيير الاسم
+            await member.setNickname(newName);
+            
+            // الرسالة الرسمية
+            const officialMessage = `
+**🚨 مكافحة البضان والجيل المخصي 🚨**
+__بناءً على الصلاحيات الممنوحة لنا، ولأن المحتوى الرقمي الحالي وصل لمرحلة لا يمكن السكوت عليها، تقرر الآتي:__
+
+قرار رقم ${decisionNumber}# 
+
+عزل المخصي : <@${member.id}> **و تم تغير اسمه ل ${newName} + رول البيضة**
+
+السبب : ${reason}
+
+**يُنفذ القرار فوراً ويُضرب بيد من حديد على كل من سولت له نفسه الاستظراف و الاستخفاف ببيضنا.**
+
+**الله , الوطـــن , السلــحــفــاء.**
+
+** معا نحو مستقبل أقل بيض #**
+** بضاني مش لعبة #**
+
+||@everyone||`;
+
+            await interaction.reply({ content: 'تم تنفيذ القرار بنجاح!', ephemeral: true });
+            await interaction.channel.send(officialMessage);
+            
+        } catch (error) {
+            console.error(error);
+            await interaction.reply({ content: 'حصلت مشكلة وأنا بنفذ القرار! اتأكد إن رتبة البوت أعلى من رتبة الشخص والرول اللي عايز تديهوله، وإن البوت عنده صلاحية Manage Roles و Manage Nicknames.', ephemeral: true });
+        }
+    }
+});
+
+client.on('messageCreate', async message => {
+    if (message.author.bot) return;
+
+    // لو المستخدم في البلاك ليست، نتجاهله تماماً
+    if (BLACKLIST.includes(message.author.id)) return;
+
+    // كوماند دخول الروم
+    if (message.content === '!join') {
+        if (message.member.voice.channel) {
+            connection = joinVoiceChannel({
+                channelId: message.member.voice.channel.id,
+                guildId: message.guild.id,
+                adapterCreator: message.guild.voiceAdapterCreator,
+            });
+            connection.subscribe(player);
+            message.reply('دخلت الروم الصوتي! 🎤');
+            
+            queue.push("السَلامُ عَلَيْكُمْ");
+            if (!isPlaying) {
+                processNextInQueue();
+            }
+        } else {
+            message.reply('لازم تدخل روم صوتي الأول!');
+        }
+    }
+
+    // كوماند الكلام
+    if (message.content.startsWith('!say ')) {
+        if (!connection) {
+            return message.reply('لازم تدخلني الروم الأول باستخدام كوماند !join');
+        }
+
+        const botVoiceChannelId = message.guild.members.me.voice.channelId;
+        const memberVoiceChannelId = message.member.voice.channelId;
+
+        if (botVoiceChannelId !== memberVoiceChannelId) {
+            return message.reply('عشان تخليني أتكلم لازم تكون معايا في نفس الروم الصوتي!');
+        }
+
+        const text = message.content.slice(5);
+        message.react('🗣️');
+        
+        queue.push(text);
+        
+        if (!isPlaying) {
+            processNextInQueue();
+        }
+    }
+    
+    // كوماند الإيقاف
+    if (message.content === '!stop') {
+        if (!connection) return;
+        
+        const botVoiceChannelId = message.guild.members.me.voice.channelId;
+        const memberVoiceChannelId = message.member.voice.channelId;
+
+        if (botVoiceChannelId !== memberVoiceChannelId) {
+            return message.reply('عشان توقفني لازم تكون معايا في نفس الروم الصوتي!');
+        }
+
+        queue = [];
+        player.stop();
+        message.react('🛑');
+        message.reply('سكت خلاص ومسحت كل الكلام اللي كان في الطابور!');
+    }
+
+    // كوماند الخروج
+    if (message.content === '!leave') {
+        if (connection) {
+            queue = [];
+            player.stop();
+            
+            connection.destroy();
+            connection = null;
+            message.reply('خرجت من الروم الصوتي! 👋');
+        } else {
+            message.reply('أنا مش في روم صوتي أصلاً!');
+        }
+    }
+});
+
+client.login(process.env.DISCORD_TOKEN);
