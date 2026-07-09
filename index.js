@@ -105,9 +105,34 @@ function convertFranco(text) {
     return text.replace(regex, match => francoMap[match.toLowerCase()] || match);
 }
 
+// إضافة علامات ترقيم ذكية عشان البوت ياخد نفس ويسأل طبيعي
+function addSmartPunctuation(text) {
+    // 1. إضافة علامة استفهام للأسئلة
+    const questionWords = ['ليه', 'إزاي', 'ازاي', 'فين', 'امتى', 'إمتى', 'مين', 'بكام', 'هل', 'ايه', 'إيه', 'بجد', 'اومال'];
+    const hasQuestionWord = questionWords.some(word => {
+        const regex = new RegExp(`(^|\\s)${word}(\\s|$)`, 'i');
+        return regex.test(text);
+    });
+    
+    if (hasQuestionWord && !text.includes('؟') && !text.includes('?')) {
+        text = text.trim() + '؟';
+    }
+
+    // 2. إضافة فواصل قبل الكلمات اللي محتاجة وقفة (نَفَس)
+    const pauseWords = ['يا', 'بس', 'عشان', 'علشان', 'لكن', 'بقولك', 'طيب', 'طب', 'وبعدين'];
+    pauseWords.forEach(word => {
+        // لو مفيش قبلها فاصلة، حط فاصلة
+        const regex = new RegExp(`([^،,])\\s+(${word})(\\s|$)`, 'g');
+        text = text.replace(regex, '$1، $2$3');
+    });
+
+    return text.replace(/\s+/g, ' ').trim();
+}
+
 // دالة توليد وتشغيل الصوت
 async function generateAndPlayTTS(rawText) {
-    const text = convertFranco(rawText); // تحويل النص لفرانكو لو كان إنجليزي
+    let text = convertFranco(rawText); // تحويل الفرانكو أولاً
+    text = addSmartPunctuation(text);  // إضافة الترقيم الذكي عشان الطلاقة
     
     const tts = new MsEdgeTTS();
     await tts.setMetadata('ar-EG-SalmaNeural', OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
