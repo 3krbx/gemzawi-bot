@@ -49,7 +49,7 @@ let isPlaying = false;
 let currentResourceFile = null;
 
 // قائمة البلاك ليست (الأيديهات الممنوعة من استخدام البوت)
-const BLACKLIST = ['192409037772423168'];
+const BLACKLIST = [];
 
 client.on('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
