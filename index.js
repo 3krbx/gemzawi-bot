@@ -83,8 +83,32 @@ client.on('ready', async () => {
     });
 });
 
+// تحويل الفرانكو لعربي عشان البوت يفهمه
+function convertFranco(text) {
+    // لو النص كله عربي مش هنغير فيه حاجة
+    if (!/[a-zA-Z0-9]/.test(text)) return text;
+
+    const francoMap = {
+        'th': 'ث', 'sh': 'ش', 'gh': 'غ', 'kh': 'خ', 'dh': 'ذ', 'ch': 'تش',
+        '3\'': 'غ', '7\'': 'خ',
+        'a': 'ا', 'b': 'ب', 't': 'ت', 'j': 'ج', '7': 'ح', 
+        '5': 'خ', 'd': 'د', 'z': 'ز', 'r': 'ر', 's': 'س', 
+        '9': 'ص', '6': 'ط', '3': 'ع', 'g': 'ج', 'f': 'ف', 'q': 'ق', '8': 'ق', 
+        'k': 'ك', 'c': 'ك', 'l': 'ل', 'm': 'م', 'n': 'ن', 'h': 'ه', 'w': 'و', 
+        'o': 'و', 'u': 'و', 'y': 'ي', 'i': 'ي', 'e': 'ي', 'p': 'ب', 'v': 'ف',
+        '2': 'أ', 'x': 'كس'
+    };
+    
+    const sortedKeys = Object.keys(francoMap).sort((a, b) => b.length - a.length);
+    const regex = new RegExp(sortedKeys.map(k => k.replace(/'/g, "\\'")).join('|'), 'gi');
+    
+    return text.replace(regex, match => francoMap[match.toLowerCase()] || match);
+}
+
 // دالة توليد وتشغيل الصوت
-async function generateAndPlayTTS(text) {
+async function generateAndPlayTTS(rawText) {
+    const text = convertFranco(rawText); // تحويل النص لفرانكو لو كان إنجليزي
+    
     const tts = new MsEdgeTTS();
     await tts.setMetadata('ar-EG-SalmaNeural', OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
     
