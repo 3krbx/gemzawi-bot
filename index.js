@@ -12,6 +12,15 @@ const os = require('os');
 const fs = require('fs');
 require('dotenv').config();
 
+// دوال حفظ واسترجاع بيانات العقوبات
+const PUNISHMENTS_FILE = path.join(__dirname, 'punishments.json');
+function loadPunishments() {
+    if (!fs.existsSync(PUNISHMENTS_FILE)) return {};
+    try { return JSON.parse(fs.readFileSync(PUNISHMENTS_FILE, 'utf8')); } catch(e) { return {}; }
+}
+function savePunishments(data) {
+    fs.writeFileSync(PUNISHMENTS_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
 // سيرفر ويب بسيط عشان الاستضافات المجانية (زي Render أو Koyeb) متقفلش البوت
 const express = require('express');
 const app = express();
@@ -81,6 +90,46 @@ client.on('ready', async () => {
             console.error(`Failed to register slash commands for guild ${guild.name}`, err);
         }
     });
+
+    // فحص العقوبات المنتهية كل دقيقة
+    setInterval(async () => {
+        const data = loadPunishments();
+        let changed = false;
+        const now = Date.now();
+
+        for (const guildId in data) {
+            for (const userId in data[guildId]) {
+                const punishInfo = data[guildId][userId];
+                if (now >= punishInfo.unpunishAt) {
+                    try {
+                        const guild = await client.guilds.fetch(guildId).catch(()=>null);
+                        if (guild) {
+                            const member = await guild.members.fetch(userId).catch(()=>null);
+                            if (member) {
+                                // سحب رول العقاب
+                                const roleId = '1144243984949055538';
+                                await member.roles.remove(roleId).catch(()=>{});
+                                // استرجاع الرولات القديمة
+                                if (punishInfo.oldRoles && punishInfo.oldRoles.length > 0) {
+                                    for (const rId of punishInfo.oldRoles) {
+                                        await member.roles.add(rId).catch(()=>{});
+                                    }
+                                }
+                                // استرجاع الاسم
+                                await member.setNickname(punishInfo.oldName).catch(()=>{});
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Error restoring user", e);
+                    }
+                    
+                    delete data[guildId][userId];
+                    changed = true;
+                }
+            }
+        }
+        if (changed) savePunishments(data);
+    }, 60000);
 });
 
 // تحويل الفرانكو لعربي عشان البوت يفهمه
@@ -212,6 +261,21 @@ client.on('interactionCreate', async interaction => {
         let nameChanged = true;
         let roleAdded = true;
 
+        // حفظ البيانات القديمة (الاسم والرولات اللي يقدر يسحبها)
+        const oldName = member.nickname;
+        const oldRoles = member.roles.cache
+            .filter(r => r.id !== interaction.guild.id && !r.managed)
+            .map(r => r.id);
+
+        // سحب كل الرولات
+        try {
+            if (oldRoles.length > 0) {
+                await member.roles.remove(oldRoles);
+            }
+        } catch(e) {
+            console.error("Couldn't remove old roles", e.message);
+        }
+
         // نحاول ندي الرول
         try {
             await member.roles.add(roleId);
@@ -227,6 +291,16 @@ client.on('interactionCreate', async interaction => {
             console.error("Couldn't change nickname:", error.message);
             nameChanged = false;
         }
+
+        // تسجيل العقوبة في الملف لمدة 24 ساعة
+        const data = loadPunishments();
+        if (!data[interaction.guild.id]) data[interaction.guild.id] = {};
+        data[interaction.guild.id][member.id] = {
+            oldName: oldName,
+            oldRoles: oldRoles,
+            unpunishAt: Date.now() + (24 * 60 * 60 * 1000)
+        };
+        savePunishments(data);
             
         // الرسالة الرسمية بتنزل عادي في كل الحالات
         const officialMessage = `
