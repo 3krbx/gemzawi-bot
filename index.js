@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, ApplicationCommandOptionType } = require('discord.js');
+const { Client, GatewayIntentBits, ApplicationCommandOptionType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const path = require('path');
 const os = require('os');
@@ -248,7 +248,31 @@ async function generateAndPlayTTS(rawText) {
 async function playMusic(item) {
     try {
         await voicePlayer.playTrack({ track: { encoded: item.trackEncoded } });
-        item.message.channel.send(`🎶 جاري تشغيل: **${item.title}**`);
+        
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('music_pause_resume')
+                    .setLabel('⏸️ تشغيل/إيقاف مؤقت')
+                    .setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder()
+                    .setCustomId('music_skip')
+                    .setLabel('⏭️ تخطي')
+                    .setStyle(ButtonStyle.Primary),
+                new ButtonBuilder()
+                    .setCustomId('music_stop')
+                    .setLabel('🛑 إيقاف')
+                    .setStyle(ButtonStyle.Danger),
+                new ButtonBuilder()
+                    .setCustomId('music_queue')
+                    .setLabel('📜 الطابور')
+                    .setStyle(ButtonStyle.Success)
+            );
+            
+        await item.message.channel.send({
+            content: `🎶 جاري تشغيل: **${item.title}**`,
+            components: [row]
+        });
     } catch (error) {
         console.error("Music Error:", error.message);
         item.message.channel.send(`❌ مقدرتش أشغل الأغنية دي: ${error.message.substring(0, 300)}`);
@@ -274,8 +298,55 @@ function processNextInQueue() {
     }
 }
 
-// التعامل مع السلاش كوماند
+// التعامل مع السلاش كوماند والكونترول بانل
 client.on('interactionCreate', async interaction => {
+    if (interaction.isButton()) {
+        if (interaction.customId.startsWith('music_')) {
+            if (!interaction.member.voice.channel) {
+                return interaction.reply({ content: 'لازم تكون في روم صوتي الأول عشان تتحكم!', ephemeral: true });
+            }
+            
+            if (!voicePlayer) {
+                return interaction.reply({ content: 'البوت مش في روم صوتي أصلاً!', ephemeral: true });
+            }
+            
+            const botVoiceChannelId = voicePlayer.connection.channelId;
+            const memberVoiceChannelId = interaction.member.voice.channelId;
+            if (botVoiceChannelId !== memberVoiceChannelId) {
+                return interaction.reply({ content: 'لازم تكون معايا في نفس الروم الصوتي عشان تتحكم!', ephemeral: true });
+            }
+            
+            if (interaction.customId === 'music_pause_resume') {
+                const isPaused = voicePlayer.paused;
+                await voicePlayer.pause(!isPaused);
+                return interaction.reply({ content: isPaused ? '▶️ تم الاستئناف!' : '⏸️ تم الإيقاف المؤقت!', ephemeral: true });
+            }
+            
+            if (interaction.customId === 'music_skip') {
+                if (currentPlaybackType !== 'music') {
+                    return interaction.reply({ content: 'مفيش أغنية شغالة حالياً لتخطيها!', ephemeral: true });
+                }
+                await voicePlayer.stopTrack();
+                return interaction.reply({ content: '⏭️ تم تخطي الأغنية!', ephemeral: true });
+            }
+            
+            if (interaction.customId === 'music_stop') {
+                queue = [];
+                await voicePlayer.stopTrack();
+                return interaction.reply({ content: '🛑 تم إيقاف التشغيل ومسح الطابور!', ephemeral: true });
+            }
+            
+            if (interaction.customId === 'music_queue') {
+                if (queue.length === 0) {
+                    return interaction.reply({ content: 'الطابور فارغ حالياً!', ephemeral: true });
+                }
+                const queueList = queue.map((item, idx) => `${idx + 1}. **${item.title || 'كلام (TTS)'}**`).join('\n');
+                return interaction.reply({ content: `📜 **طابور التشغيل:**\n${queueList.substring(0, 1900)}`, ephemeral: true });
+            }
+        }
+        return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     if (BLACKLIST.includes(interaction.user.id)) {
@@ -506,37 +577,62 @@ client.on('messageCreate', async message => {
         message.react('🔍');
         
         try {
+            // تقسيم الكويري باستخدام الفاصلة العادية والعربية
+            const queries = rawQuery.split(/[,\u060C]+/).map(q => q.trim()).filter(Boolean);
+            
+            if (queries.length === 0) {
+                return message.reply('اكتب اسم الأغنية أو الرابط بعد الكوماند!');
+            }
+
             const node = shoukaku.options.nodeResolver(shoukaku.nodes);
-            const isUrl = rawQuery.startsWith('http');
-            const searchString = isUrl ? rawQuery : `ytsearch:${rawQuery}`;
-            const result = await node.rest.resolve(searchString);
+            const addedTracks = [];
             
-            if (!result || result.loadType === 'empty' || result.loadType === 'error') {
-                return message.reply('معرفتش ألاقي الأغنية دي!');
+            // حل المسارات والروابط بالتوازي لسرعة فائقة
+            const resolvedTracks = await Promise.all(queries.map(async (query) => {
+                try {
+                    const isUrl = query.startsWith('http');
+                    const searchString = isUrl ? query : `ytsearch:${query}`;
+                    const result = await node.rest.resolve(searchString);
+                    if (!result) return null;
+                    
+                    let track;
+                    if (result.loadType === 'track') {
+                        track = result.data;
+                    } else if (result.loadType === 'search' && result.data.length > 0) {
+                        track = result.data[0];
+                    } else if (result.loadType === 'playlist' && result.data.tracks.length > 0) {
+                        track = result.data.tracks[0];
+                    }
+                    return track;
+                } catch (e) {
+                    console.error("Resolve query error:", query, e.message);
+                    return null;
+                }
+            }));
+            
+            for (const track of resolvedTracks) {
+                if (track) {
+                    queue.push({
+                        type: 'music',
+                        url: track.info.uri,
+                        title: track.info.title,
+                        trackEncoded: track.encoded,
+                        message: { channel: message.channel }
+                    });
+                    addedTracks.push(track.info.title);
+                }
             }
             
-            let track;
-            if (result.loadType === 'track') {
-                track = result.data;
-            } else if (result.loadType === 'search') {
-                track = result.data[0];
-            } else if (result.loadType === 'playlist') {
-                track = result.data.tracks[0];
+            if (addedTracks.length === 0) {
+                return message.reply('معرفتش ألاقي الأغاني دي!');
             }
             
-            if (!track) {
-                return message.reply('معرفتش ألاقي الأغنية دي!');
+            if (addedTracks.length === 1) {
+                message.reply(`✅ تم إضافة **${addedTracks[0]}** للطابور!`);
+            } else {
+                message.reply(`✅ تم إضافة **${addedTracks.length} أغنية** للطابور:\n${addedTracks.map((title, idx) => `${idx + 1}. **${title}**`).join('\n')}`);
             }
             
-            queue.push({
-                type: 'music',
-                url: track.info.uri || rawQuery,
-                title: track.info.title,
-                trackEncoded: track.encoded,
-                message: { channel: message.channel }
-            });
-            
-            message.reply(`✅ تم إضافة **${track.info.title}** للطابور!`);
             if (!isPlaying) {
                 processNextInQueue();
             }
