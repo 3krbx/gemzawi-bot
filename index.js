@@ -1,65 +1,10 @@
 const { Client, GatewayIntentBits, ApplicationCommandOptionType } = require('discord.js');
-const {
-    joinVoiceChannel,
-    createAudioPlayer,
-    createAudioResource,
-    NoSubscriberBehavior,
-    AudioPlayerStatus
-} = require('@discordjs/voice');
 const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const youtubedl = require('youtube-dl-exec');
-const ytSearch = require('yt-search');
+const { Shoukaku, Connectors } = require('shoukaku');
 require('dotenv').config();
-
-// لو عندنا cookies في env variable، اكتبها في ملف مؤقت
-const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
-if (process.env.YT_COOKIES && !fs.existsSync(COOKIES_PATH)) {
-    fs.writeFileSync(COOKIES_PATH, process.env.YT_COOKIES, 'utf8');
-    console.log('Cookies written from environment variable.');
-}
-
-// جيب رابط الستريم من يوتيوب بدون بلوك
-async function getYouTubeStreamUrl(videoUrl) {
-    const opts = {
-        dumpJson: true,
-        format: 'bestaudio',
-        noWarnings: true,
-        preferFreeFormats: true,
-        extractorArgs: 'youtube:player_client=android_testsuite'
-    };
-    // لو عندنا cookies.txt ضيفها
-    if (fs.existsSync(COOKIES_PATH)) {
-        opts.cookies = COOKIES_PATH;
-    }
-    const output = await youtubedl(videoUrl, opts);
-    if (!output || !output.url) throw new Error('مجاتشش رابط ستريم!');
-    return { streamUrl: output.url, title: output.title };
-}
-
-// استخرج video ID من رابط يوتيوب
-function extractVideoId(url) {
-    const patterns = [
-        /youtu\.be\/([\w-]+)/,
-        /youtube\.com\/watch\?v=([\w-]+)/,
-        /youtube\.com\/shorts\/([\w-]+)/
-    ];
-    for (const p of patterns) {
-        const m = url.match(p);
-        if (m) return m[1];
-    }
-    return null;
-}
-
-// إضافة نظام حماية ضد التهنيج (Timeout) لو يوتيوب عمل بلوك للسيرفر
-const withTimeout = (promise, ms) => {
-    return Promise.race([
-        promise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), ms))
-    ]);
-};
 
 // دوال حفظ واسترجاع بيانات العقوبات
 const PUNISHMENTS_FILE = path.join(__dirname, 'punishments.json');
@@ -73,6 +18,10 @@ function savePunishments(data) {
 // سيرفر ويب بسيط عشان الاستضافات المجانية (زي Render أو Koyeb) متقفلش البوت
 const express = require('express');
 const app = express();
+const ttsDir = path.join(__dirname, 'tts_temp');
+if (!fs.existsSync(ttsDir)) fs.mkdirSync(ttsDir);
+app.use('/tts', express.static(ttsDir));
+
 app.get('/', (req, res) => res.send('Bot is running!'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
@@ -86,14 +35,23 @@ const client = new Client({
     ]
 });
 
-const player = createAudioPlayer({
-    behaviors: {
-        noSubscriber: NoSubscriberBehavior.Pause,
-    },
+const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), [
+    { name: 'Serenetia', url: 'lavalinkv4.serenetia.com:443', auth: 'https://seretia.link/discord', secure: true },
+    { name: 'Jirayu', url: 'lavalink.jirayu.net:443', auth: 'youshallnotpass', secure: true }
+], {
+    moveOnDisconnect: false,
+    resume: false,
+    resumeTimeout: 30,
+    reconnectTries: 2,
+    restTimeout: 10000
 });
 
-let connection = null;
-let queue = []; // Now stores objects: { type: 'tts', text: '...' } or { type: 'music', url: '...', title: '...', message: Message }
+shoukaku.on('error', (name, error) => console.error(`Shoukaku Node ${name} Error:`, error.message || error));
+shoukaku.on('ready', (name) => console.log(`Lavalink Node ${name} connected!`));
+shoukaku.on('disconnect', (name) => console.log(`Lavalink Node ${name} disconnected`));
+
+let voicePlayer = null;
+let queue = [];
 let isPlaying = false;
 let currentResourceFile = null;
 let currentPlaybackType = null;
@@ -228,6 +186,24 @@ function addSmartPunctuation(text) {
     return text.replace(/\s+/g, ' ').trim();
 }
 
+function cleanupCurrentResourceFile() {
+    if (currentResourceFile) {
+        try {
+            if (fs.existsSync(currentResourceFile.file)) fs.unlinkSync(currentResourceFile.file);
+            if (currentResourceFile.dir && fs.existsSync(currentResourceFile.dir)) {
+                const files = fs.readdirSync(currentResourceFile.dir);
+                for (const file of files) {
+                    fs.unlinkSync(path.join(currentResourceFile.dir, file));
+                }
+                fs.rmdirSync(currentResourceFile.dir);
+            }
+        } catch (e) {
+            console.error("Error cleaning up:", e);
+        }
+        currentResourceFile = null;
+    }
+}
+
 // دالة توليد وتشغيل الصوت
 async function generateAndPlayTTS(rawText) {
     let text = convertFranco(rawText); // تحويل الفرانكو أولاً
@@ -236,16 +212,31 @@ async function generateAndPlayTTS(rawText) {
     const tts = new MsEdgeTTS();
     await tts.setMetadata('ar-EG-SalmaNeural', OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
     
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tts-'));
+    const reqId = `tts-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const reqDir = path.join(ttsDir, reqId);
+    fs.mkdirSync(reqDir);
     
     try {
-        const filePath = path.join(tmpDir, 'output.webm');
-        const result = await tts.toFile(tmpDir, text);
+        const filePath = path.join(reqDir, 'output.webm');
+        const result = await tts.toFile(reqDir, text);
         const actualFilePath = result.audioFilePath || filePath; 
         
-        currentResourceFile = { file: actualFilePath, dir: tmpDir };
-        const resource = createAudioResource(actualFilePath);
-        player.play(resource);
+        currentResourceFile = { file: actualFilePath, dir: reqDir };
+        
+        const port = process.env.PORT || 3000;
+        const host = process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`;
+        const fileName = path.basename(actualFilePath);
+        const playUrl = `${host}/tts/${reqId}/${fileName}`;
+        
+        const node = shoukaku.options.nodeResolver(shoukaku.nodes);
+        const resolveResult = await node.rest.resolve(playUrl);
+        
+        if (resolveResult && resolveResult.loadType === 'track') {
+            await voicePlayer.playTrack({ track: { encoded: resolveResult.data.encoded } });
+        } else {
+            console.error("Lavalink failed to resolve TTS:", playUrl, resolveResult);
+            processNextInQueue();
+        }
     } catch (error) {
         console.error("TTS Error:", error);
         processNextInQueue(); // في حالة خطأ، ننتقل للي بعده
@@ -256,8 +247,7 @@ async function generateAndPlayTTS(rawText) {
 
 async function playMusic(item) {
     try {
-        const resource = createAudioResource(item.streamUrl, { inlineVolume: true });
-        player.play(resource);
+        await voicePlayer.playTrack({ track: { encoded: item.trackEncoded } });
         item.message.channel.send(`🎶 جاري تشغيل: **${item.title}**`);
     } catch (error) {
         console.error("Music Error:", error.message);
@@ -278,32 +268,11 @@ function processNextInQueue() {
     currentPlaybackType = item.type;
     
     if (item.type === 'tts') {
-        generateAndPlayTTS(item.text); // generateAndPlayTTS should handle the file writing
+        generateAndPlayTTS(item.text); 
     } else if (item.type === 'music') {
         playMusic(item);
     }
 }
-
-// لما المقطع يخلص، نظف الملفات وشغل اللي بعده لو موجود
-player.on(AudioPlayerStatus.Idle, () => {
-    if (currentResourceFile) {
-        try {
-            if (fs.existsSync(currentResourceFile.file)) fs.unlinkSync(currentResourceFile.file);
-            if (fs.existsSync(currentResourceFile.dir)) fs.rmdirSync(currentResourceFile.dir);
-        } catch (e) {
-            console.error("Error cleaning up:", e);
-        }
-        currentResourceFile = null;
-    }
-    
-    processNextInQueue();
-});
-
-// التعامل مع الأخطاء عشان البوت ميوقفش
-player.on('error', error => {
-    console.error('Audio Player Error:', error.message);
-    processNextInQueue();
-});
 
 // التعامل مع السلاش كوماند
 client.on('interactionCreate', async interaction => {
@@ -421,12 +390,39 @@ client.on('messageCreate', async message => {
     // كوماند دخول الروم
     if (message.content === '!join') {
         if (message.member.voice.channel) {
-            connection = joinVoiceChannel({
-                channelId: message.member.voice.channel.id,
+            let isNewPlayer = false;
+            if (!voicePlayer) {
+                isNewPlayer = true;
+            }
+            
+            voicePlayer = await shoukaku.joinVoiceChannel({
                 guildId: message.guild.id,
-                adapterCreator: message.guild.voiceAdapterCreator,
+                channelId: message.member.voice.channel.id,
+                shardId: 0
             });
-            connection.subscribe(player);
+            
+            if (isNewPlayer) {
+                voicePlayer.on('end', (data) => {
+                    if (data.reason === 'finished' || data.reason === 'stopped') {
+                        cleanupCurrentResourceFile();
+                        isPlaying = false;
+                        processNextInQueue();
+                    }
+                });
+                voicePlayer.on('exception', (error) => {
+                    console.error("Lavalink Player Exception:", error);
+                    cleanupCurrentResourceFile();
+                    isPlaying = false;
+                    processNextInQueue();
+                });
+                voicePlayer.on('stuck', () => {
+                    console.warn("Lavalink Player Stuck");
+                    cleanupCurrentResourceFile();
+                    isPlaying = false;
+                    processNextInQueue();
+                });
+            }
+            
             message.reply('دخلت الروم الصوتي! 🎤');
             
             queue.push({ type: 'tts', text: "السَلامُ عَلَيْكُمْ" });
@@ -440,11 +436,11 @@ client.on('messageCreate', async message => {
 
     // كوماند الكلام
     if (message.content.startsWith('!say ')) {
-        if (!connection) {
+        if (!voicePlayer) {
             return message.reply('لازم تدخلني الروم الأول باستخدام كوماند !join');
         }
 
-        const botVoiceChannelId = message.guild.members.me.voice.channelId;
+        const botVoiceChannelId = voicePlayer.channelId;
         const memberVoiceChannelId = message.member.voice.channelId;
 
         if (botVoiceChannelId !== memberVoiceChannelId) {
@@ -459,7 +455,7 @@ client.on('messageCreate', async message => {
         queue.push({ type: 'tts', text });
         
         if (currentPlaybackType === 'music') {
-            player.stop(); // ده هيوقف الأغنية ويشغل الـ Idle اللي هينقل للكلام
+            await voicePlayer.stopTrack(); 
         } else if (!isPlaying) {
             processNextInQueue();
         }
@@ -471,13 +467,37 @@ client.on('messageCreate', async message => {
             return message.reply('لازم تدخل روم صوتي الأول!');
         }
         
-        if (!connection || connection.joinConfig.channelId !== message.member.voice.channel.id) {
-            connection = joinVoiceChannel({
-                channelId: message.member.voice.channel.id,
-                guildId: message.guild.id,
-                adapterCreator: message.guild.voiceAdapterCreator,
+        let isNewPlayer = false;
+        if (!voicePlayer) {
+            isNewPlayer = true;
+        }
+        
+        voicePlayer = await shoukaku.joinVoiceChannel({
+            guildId: message.guild.id,
+            channelId: message.member.voice.channel.id,
+            shardId: 0
+        });
+        
+        if (isNewPlayer) {
+            voicePlayer.on('end', (data) => {
+                if (data.reason === 'finished' || data.reason === 'stopped') {
+                    cleanupCurrentResourceFile();
+                    isPlaying = false;
+                    processNextInQueue();
+                }
             });
-            connection.subscribe(player);
+            voicePlayer.on('exception', (error) => {
+                console.error("Lavalink Player Exception:", error);
+                cleanupCurrentResourceFile();
+                isPlaying = false;
+                processNextInQueue();
+            });
+            voicePlayer.on('stuck', () => {
+                console.warn("Lavalink Player Stuck");
+                cleanupCurrentResourceFile();
+                isPlaying = false;
+                processNextInQueue();
+            });
         }
 
         const rawQuery = message.content.slice(6).trim();
@@ -486,52 +506,60 @@ client.on('messageCreate', async message => {
         message.react('🔍');
         
         try {
-            let track;
-            const rawQ = rawQuery;
-
-            if (rawQ.startsWith('http')) {
-                let url = rawQ;
-                if (url.includes('&list=')) url = url.split('&list=')[0];
-                if (url.includes('?list=')) url = url.split('?list=')[0];
-                const videoId = extractVideoId(url);
-                if (!videoId) return message.reply('رابط غير معروف!');
-                
-                const result = await getYouTubeStreamUrl(`https://www.youtube.com/watch?v=${videoId}`);
-                track = result;
-            } else {
-                // بحث بالاسم
-                const searchRes = await ytSearch(rawQ);
-                if (!searchRes || !searchRes.videos || searchRes.videos.length === 0) {
-                    return message.reply('معرفتش ألاقي الأغنية دي!');
-                }
-                const video = searchRes.videos[0];
-                const result = await getYouTubeStreamUrl(video.url);
-                track = result;
+            const node = shoukaku.options.nodeResolver(shoukaku.nodes);
+            const isUrl = rawQuery.startsWith('http');
+            const searchString = isUrl ? rawQuery : `ytsearch:${rawQuery}`;
+            const result = await node.rest.resolve(searchString);
+            
+            if (!result || result.loadType === 'empty' || result.loadType === 'error') {
+                return message.reply('معرفتش ألاقي الأغنية دي!');
             }
-
-            queue.push({ type: 'music', streamUrl: track.streamUrl, title: track.title, message: { channel: message.channel } });
-            message.reply(`✅ تم إضافة **${track.title}** للطابور!`);
-            if (!isPlaying) processNextInQueue();
+            
+            let track;
+            if (result.loadType === 'track') {
+                track = result.data;
+            } else if (result.loadType === 'search') {
+                track = result.data[0];
+            } else if (result.loadType === 'playlist') {
+                track = result.data.tracks[0];
+            }
+            
+            if (!track) {
+                return message.reply('معرفتش ألاقي الأغنية دي!');
+            }
+            
+            queue.push({
+                type: 'music',
+                url: track.info.uri || rawQuery,
+                title: track.info.title,
+                trackEncoded: track.encoded,
+                message: { channel: message.channel }
+            });
+            
+            message.reply(`✅ تم إضافة **${track.info.title}** للطابور!`);
+            if (!isPlaying) {
+                processNextInQueue();
+            }
         } catch (err) {
             console.error("Play error:", err);
-            message.reply(`❌ معرفتشش الأغنية دي: ${err.message.substring(0, 300)}`);
+            message.reply(`❌ حصلت مشكلة وأنا بدور على الأغنية: ${err.message.substring(0, 300)}`);
         }
     }
 
     // كوماند تخطي الأغنية
     if (message.content === '!skip') {
-        if (!connection) return;
+        if (!voicePlayer) return;
         if (currentPlaybackType !== 'music') return message.reply('مفيش أغنية شغالة عشان أتخطاها!');
         
         message.reply('⏭️ تم التخطي!');
-        player.stop();
+        await voicePlayer.stopTrack();
     }
     
     // كوماند الإيقاف
     if (message.content === '!stop') {
-        if (!connection) return;
+        if (!voicePlayer) return;
         
-        const botVoiceChannelId = message.guild.members.me.voice.channelId;
+        const botVoiceChannelId = voicePlayer.channelId;
         const memberVoiceChannelId = message.member.voice.channelId;
 
         if (botVoiceChannelId !== memberVoiceChannelId) {
@@ -539,19 +567,18 @@ client.on('messageCreate', async message => {
         }
 
         queue = [];
-        player.stop();
+        await voicePlayer.stopTrack();
         message.react('🛑');
         message.reply('سكت خلاص ومسحت كل الأغاني والكلام اللي في الطابور!');
     }
 
     // كوماند الخروج
     if (message.content === '!leave') {
-        if (connection) {
+        if (voicePlayer) {
             queue = [];
-            player.stop();
-            
-            connection.destroy();
-            connection = null;
+            await voicePlayer.stopTrack();
+            await shoukaku.leaveVoiceChannel(message.guild.id);
+            voicePlayer = null;
             message.reply('خرجت من الروم الصوتي! 👋');
         } else {
             message.reply('أنا مش في روم صوتي أصلاً!');
