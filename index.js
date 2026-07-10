@@ -317,9 +317,9 @@ client.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: 'البوت مش في روم صوتي أصلاً!', ephemeral: true });
             }
             
-            const botVoiceChannelId = voicePlayer.connection.channelId;
-            const memberVoiceChannelId = interaction.member.voice.channelId;
-            if (botVoiceChannelId !== memberVoiceChannelId) {
+            const botVoiceChannelId = interaction.guild.members.me?.voice?.channelId;
+            const memberVoiceChannelId = interaction.member.voice?.channelId;
+            if (!botVoiceChannelId || botVoiceChannelId !== memberVoiceChannelId) {
                 return interaction.reply({ content: 'لازم تكون معايا في نفس الروم الصوتي عشان تتحكم!', ephemeral: true });
             }
             
@@ -518,7 +518,7 @@ client.on('messageCreate', async message => {
             return message.reply('لازم تدخلني الروم الأول باستخدام كوماند !join');
         }
 
-        const botVoiceChannelId = voicePlayer?.connection?.channelId;
+        const botVoiceChannelId = message.guild.members.me?.voice?.channelId;
         const memberVoiceChannelId = message.member.voice?.channelId;
 
         if (!botVoiceChannelId || botVoiceChannelId !== memberVoiceChannelId) {
@@ -662,7 +662,7 @@ client.on('messageCreate', async message => {
     if (message.content === '!stop') {
         if (!voicePlayer) return;
         
-        const botVoiceChannelId = voicePlayer?.connection?.channelId;
+        const botVoiceChannelId = message.guild.members.me?.voice?.channelId;
         const memberVoiceChannelId = message.member.voice?.channelId;
 
         if (!botVoiceChannelId || botVoiceChannelId !== memberVoiceChannelId) {
