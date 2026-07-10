@@ -231,7 +231,7 @@ async function playMusic(item) {
         item.message.channel.send(`🎶 جاري تشغيل: **${item.title}**`);
     } catch (error) {
         console.error("Music Error:", error);
-        item.message.channel.send("❌ يوتيوب رفض يشغل الأغنية دي (حظر السيرفر أو مهنج).");
+        item.message.channel.send(`❌ يوتيوب رفض يشغل الأغنية دي:\n\`\`\`${error.message.substring(0, 500)}\`\`\``);
         processNextInQueue();
     }
 }
@@ -487,7 +487,7 @@ client.on('messageCreate', async message => {
             }
         } catch (err) {
             console.error("Play error:", err);
-            message.reply('❌ يوتيوب رفض طلب البحث (ممكن يكون السيرفر واخد بلوك مؤقت)، جرب تاني كمان شوية!');
+            message.reply(`❌ يوتيوب رفض طلب البحث:\n\`\`\`${err.message.substring(0, 500)}\`\`\``);
         }
     }
 
