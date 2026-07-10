@@ -10,6 +10,7 @@ const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const play = require('play-dl');
 require('dotenv').config();
 
 // دوال حفظ واسترجاع بيانات العقوبات
@@ -44,9 +45,10 @@ const player = createAudioPlayer({
 });
 
 let connection = null;
-let queue = [];
+let queue = []; // Now stores objects: { type: 'tts', text: '...' } or { type: 'music', url: '...', title: '...', message: Message }
 let isPlaying = false;
 let currentResourceFile = null;
+let currentPlaybackType = null;
 
 // قائمة البلاك ليست (الأيديهات الممنوعة من استخدام البوت)
 const BLACKLIST = [];
@@ -204,15 +206,37 @@ async function generateAndPlayTTS(rawText) {
     }
 }
 
+async function playMusic(item) {
+    try {
+        const stream = await play.stream(item.url);
+        const resource = createAudioResource(stream.stream, {
+            inputType: stream.type
+        });
+        player.play(resource);
+        item.message.channel.send(`🎶 جاري تشغيل: **${item.title}**`);
+    } catch (error) {
+        console.error("Music Error:", error);
+        item.message.channel.send("❌ حصلت مشكلة في تشغيل الأغنية دي.");
+        processNextInQueue();
+    }
+}
+
 function processNextInQueue() {
     if (queue.length === 0) {
         isPlaying = false;
+        currentPlaybackType = null;
         return;
     }
     
     isPlaying = true;
-    const nextText = queue.shift();
-    generateAndPlayTTS(nextText);
+    const item = queue.shift();
+    currentPlaybackType = item.type;
+    
+    if (item.type === 'tts') {
+        generateAndPlayTTS(item.text); // generateAndPlayTTS should handle the file writing
+    } else if (item.type === 'music') {
+        playMusic(item);
+    }
 }
 
 // لما المقطع يخلص، نظف الملفات وشغل اللي بعده لو موجود
@@ -360,7 +384,7 @@ client.on('messageCreate', async message => {
             connection.subscribe(player);
             message.reply('دخلت الروم الصوتي! 🎤');
             
-            queue.push("السَلامُ عَلَيْكُمْ");
+            queue.push({ type: 'tts', text: "السَلامُ عَلَيْكُمْ" });
             if (!isPlaying) {
                 processNextInQueue();
             }
@@ -385,11 +409,63 @@ client.on('messageCreate', async message => {
         const text = message.content.slice(5);
         message.react('🗣️');
         
-        queue.push(text);
+        // نظام المقاطعة: وقف الأغاني وشغل الكلام
+        queue = queue.filter(item => item.type === 'tts');
+        queue.push({ type: 'tts', text });
         
-        if (!isPlaying) {
+        if (currentPlaybackType === 'music') {
+            player.stop(); // ده هيوقف الأغنية ويشغل الـ Idle اللي هينقل للكلام
+        } else if (!isPlaying) {
             processNextInQueue();
         }
+    }
+    
+    // كوماند الأغاني
+    if (message.content.startsWith('!play ')) {
+        if (!message.member.voice.channel) {
+            return message.reply('لازم تدخل روم صوتي الأول!');
+        }
+        
+        if (!connection || connection.joinConfig.channelId !== message.member.voice.channel.id) {
+            connection = joinVoiceChannel({
+                channelId: message.member.voice.channel.id,
+                guildId: message.guild.id,
+                adapterCreator: message.guild.voiceAdapterCreator,
+            });
+            connection.subscribe(player);
+        }
+
+        const query = message.content.slice(6).trim();
+        if (!query) return message.reply('اكتب اسم الأغنية أو الرابط بعد الكوماند!');
+        
+        message.react('🔍');
+        
+        try {
+            const searchResult = await play.search(query, { limit: 1 });
+            if (!searchResult || searchResult.length === 0) {
+                return message.reply('معرفتش ألاقي الأغنية دي!');
+            }
+            
+            const track = searchResult[0];
+            queue.push({ type: 'music', url: track.url, title: track.title, message });
+            message.reply(`✅ تم إضافة **${track.title}** للطابور!`);
+            
+            if (!isPlaying) {
+                processNextInQueue();
+            }
+        } catch (err) {
+            console.error("Play error:", err);
+            message.reply('حصلت مشكلة في البحث!');
+        }
+    }
+
+    // كوماند تخطي الأغنية
+    if (message.content === '!skip') {
+        if (!connection) return;
+        if (currentPlaybackType !== 'music') return message.reply('مفيش أغنية شغالة عشان أتخطاها!');
+        
+        message.reply('⏭️ تم التخطي!');
+        player.stop();
     }
     
     // كوماند الإيقاف
@@ -406,7 +482,7 @@ client.on('messageCreate', async message => {
         queue = [];
         player.stop();
         message.react('🛑');
-        message.reply('سكت خلاص ومسحت كل الكلام اللي كان في الطابور!');
+        message.reply('سكت خلاص ومسحت كل الأغاني والكلام اللي في الطابور!');
     }
 
     // كوماند الخروج
