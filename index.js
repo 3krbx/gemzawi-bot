@@ -440,7 +440,7 @@ client.on('messageCreate', async message => {
             return message.reply('لازم تدخلني الروم الأول باستخدام كوماند !join');
         }
 
-        const botVoiceChannelId = voicePlayer.channelId;
+        const botVoiceChannelId = voicePlayer.connection.channelId;
         const memberVoiceChannelId = message.member.voice.channelId;
 
         if (botVoiceChannelId !== memberVoiceChannelId) {
@@ -559,7 +559,7 @@ client.on('messageCreate', async message => {
     if (message.content === '!stop') {
         if (!voicePlayer) return;
         
-        const botVoiceChannelId = voicePlayer.channelId;
+        const botVoiceChannelId = voicePlayer.connection.channelId;
         const memberVoiceChannelId = message.member.voice.channelId;
 
         if (botVoiceChannelId !== memberVoiceChannelId) {
