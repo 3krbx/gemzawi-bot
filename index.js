@@ -14,15 +14,27 @@ const youtubedl = require('youtube-dl-exec');
 const ytSearch = require('yt-search');
 require('dotenv').config();
 
+// لو عندنا cookies في env variable، اكتبها في ملف مؤقت
+const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
+if (process.env.YT_COOKIES && !fs.existsSync(COOKIES_PATH)) {
+    fs.writeFileSync(COOKIES_PATH, process.env.YT_COOKIES, 'utf8');
+    console.log('Cookies written from environment variable.');
+}
+
 // جيب رابط الستريم من يوتيوب بدون بلوك
 async function getYouTubeStreamUrl(videoUrl) {
-    const output = await youtubedl(videoUrl, {
+    const opts = {
         dumpJson: true,
         format: 'bestaudio',
         noWarnings: true,
         preferFreeFormats: true,
         extractorArgs: 'youtube:player_client=android_testsuite'
-    });
+    };
+    // لو عندنا cookies.txt ضيفها
+    if (fs.existsSync(COOKIES_PATH)) {
+        opts.cookies = COOKIES_PATH;
+    }
+    const output = await youtubedl(videoUrl, opts);
     if (!output || !output.url) throw new Error('مجاتشش رابط ستريم!');
     return { streamUrl: output.url, title: output.title };
 }
