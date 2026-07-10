@@ -373,7 +373,6 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
             }
         }
     }
-    }
 });
 
 client.on('messageCreate', async message => {
