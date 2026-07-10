@@ -89,7 +89,6 @@ client.on('ready', async () => {
                     required: true,
                 }
             ]
-            ]
         }
     ];
 
