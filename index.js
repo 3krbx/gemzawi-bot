@@ -21,7 +21,7 @@ async function getYouTubeStreamUrl(videoUrl) {
         format: 'bestaudio',
         noWarnings: true,
         preferFreeFormats: true,
-        extractorArgs: 'youtube:player_client=tv_embedded'
+        extractorArgs: 'youtube:player_client=android_testsuite'
     });
     if (!output || !output.url) throw new Error('مجاتشش رابط ستريم!');
     return { streamUrl: output.url, title: output.title };
