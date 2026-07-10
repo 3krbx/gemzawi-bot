@@ -11,6 +11,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const youtubedl = require('youtube-dl-exec');
+const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
 require('dotenv').config();
 
 // إضافة نظام حماية ضد التهنيج (Timeout) لو يوتيوب عمل بلوك للسيرفر
@@ -221,6 +222,7 @@ async function playMusic(item) {
             format: 'bestaudio',
             noWarnings: true,
             preferFreeFormats: true,
+            cookies: COOKIES_PATH,
             addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0']
         });
         
@@ -470,6 +472,7 @@ client.on('messageCreate', async message => {
                 noWarnings: true,
                 noCheckCertificates: true,
                 preferFreeFormats: true,
+                cookies: COOKIES_PATH,
                 addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0']
             });
             
