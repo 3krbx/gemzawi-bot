@@ -10,9 +10,35 @@ const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const youtubedl = require('youtube-dl-exec');
-const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
+const fetch = require('node-fetch');
+const Soundcloud = require('soundcloud.ts').default;
+const sc = new Soundcloud();
 require('dotenv').config();
+
+// جيب رابط الستريم من SoundCloud
+async function getSoundcloudStream(query) {
+    const results = await sc.tracks.search({ q: query, limit: 1 });
+    if (!results || !results.collection || results.collection.length === 0) {
+        throw new Error('معرفتش ألاقي الأغنية على SoundCloud!');
+    }
+    
+    const track = results.collection[0];
+    const clientId = sc.api.clientId;
+    
+    // جيب MP3 progressive stream (MBيضمن تشغيل مباشر)
+    const mp3Transcoding = track.media.transcodings.find(t => t.preset && t.preset.startsWith('mp3'));
+    const anyTranscoding = mp3Transcoding || track.media.transcodings[0];
+    
+    if (!anyTranscoding) throw new Error('ملقيتش ستريم مناسب للأغنية!');
+    
+    const res = await fetch(`${anyTranscoding.url}?client_id=${clientId}&track_authorization=${track.track_authorization}`);
+    if (!res.ok) throw new Error(`SoundCloud رفض طلب الستريم: ${res.status}`);
+    
+    const data = await res.json();
+    if (!data.url) throw new Error('مجاتشش رابط ستريم في الرد!');
+    
+    return { streamUrl: data.url, title: track.title };
+}
 
 // إضافة نظام حماية ضد التهنيج (Timeout) لو يوتيوب عمل بلوك للسيرفر
 const withTimeout = (promise, ms) => {
@@ -217,23 +243,12 @@ async function generateAndPlayTTS(rawText) {
 
 async function playMusic(item) {
     try {
-        const output = await youtubedl(item.url, {
-            dumpJson: true,
-            format: 'bestaudio',
-            noWarnings: true,
-            preferFreeFormats: true,
-            cookies: COOKIES_PATH,
-            addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0']
-        });
-        
-        const resource = createAudioResource(output.url, {
-            inlineVolume: true
-        });
+        const resource = createAudioResource(item.streamUrl, { inlineVolume: true });
         player.play(resource);
-        item.message.channel.send(`🎶 جاري تشغيل: **${item.title}**`);
+        item.message.channel.send(`🎶 جاري تشغيل: **${item.title}** (SoundCloud)`);
     } catch (error) {
-        console.error("Music Error:", error);
-        item.message.channel.send(`❌ يوتيوب رفض يشغل الأغنية دي:\n\`\`\`${error.message.substring(0, 500)}\`\`\``);
+        console.error("Music Error:", error.message);
+        item.message.channel.send(`❌ مقدرتش أشغل الأغنية دي: ${error.message.substring(0, 300)}`);
         processNextInQueue();
     }
 }
@@ -458,39 +473,13 @@ client.on('messageCreate', async message => {
         message.react('🔍');
         
         try {
-            let track;
-            let query = rawQuery;
-            if (query.startsWith('http')) {
-                if (query.includes('&list=')) query = query.split('&list=')[0];
-                if (query.includes('?list=')) query = query.split('?list=')[0];
-            } else {
-                query = `ytsearch1:${query}`;
-            }
-            
-            const output = await youtubedl(query, {
-                dumpJson: true,
-                noWarnings: true,
-                noCheckCertificates: true,
-                preferFreeFormats: true,
-                cookies: COOKIES_PATH,
-                addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0']
-            });
-            
-            const info = output.entries ? output.entries[0] : output;
-            if (!info) {
-                return message.reply('معرفتش ألاقي الأغنية دي!');
-            }
-            track = { url: info.webpage_url || info.url, title: info.title };
-            
-            queue.push({ type: 'music', url: track.url, title: track.title, message: { channel: message.channel } });
-            message.reply(`✅ تم إضافة **${track.title}** للطابور!`);
-            
-            if (!isPlaying) {
-                processNextInQueue();
-            }
+            const { streamUrl, title } = await getSoundcloudStream(rawQuery);
+            queue.push({ type: 'music', streamUrl, title, message: { channel: message.channel } });
+            message.reply(`✅ تم إضافة **${title}** للطابور!`);
+            if (!isPlaying) processNextInQueue();
         } catch (err) {
             console.error("Play error:", err);
-            message.reply(`❌ يوتيوب رفض طلب البحث:\n\`\`\`${err.message.substring(0, 500)}\`\`\``);
+            message.reply(`❌ معرفتشش الأغنية دي: ${err.message.substring(0, 300)}`);
         }
     }
 
