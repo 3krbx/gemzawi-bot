@@ -400,15 +400,21 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
             connection.subscribe(player);
         }
 
-        const query = interaction.options.getString('query');
+        const rawQuery = interaction.options.getString('query');
         await interaction.deferReply();
         
         try {
             let track;
+            
+            // تنظيف الرابط لو كان فيه بلاي ليست أو توقيت عشان ما يهنجش
+            let query = rawQuery;
             if (query.startsWith('http')) {
+                if (query.includes('&list=')) query = query.split('&list=')[0];
+                if (query.includes('?list=')) query = query.split('?list=')[0];
+                
                 const type = await play.validate(query);
                 if (type === 'yt_playlist') {
-                    return interaction.editReply('الرابط ده بلاي ليست، ابعت رابط أغنية واحدة بس عشان البوت ميهنجش!');
+                    return interaction.editReply('الرابط ده بلاي ليست كاملة، ابعت رابط أغنية واحدة بس!');
                 }
                 const info = await play.video_info(query);
                 track = { url: info.video_details.url, title: info.video_details.title };
