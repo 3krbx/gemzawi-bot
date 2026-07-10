@@ -10,7 +10,7 @@ const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const play = require('play-dl');
+const youtubedl = require('youtube-dl-exec');
 require('dotenv').config();
 
 // إضافة نظام حماية ضد التهنيج (Timeout) لو يوتيوب عمل بلوك للسيرفر
@@ -216,9 +216,16 @@ async function generateAndPlayTTS(rawText) {
 
 async function playMusic(item) {
     try {
-        const stream = await withTimeout(play.stream(item.url), 10000);
-        const resource = createAudioResource(stream.stream, {
-            inputType: stream.type
+        const output = await youtubedl(item.url, {
+            dumpJson: true,
+            format: 'bestaudio',
+            noWarnings: true,
+            preferFreeFormats: true,
+            addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0']
+        });
+        
+        const resource = createAudioResource(output.url, {
+            inlineVolume: true
         });
         player.play(resource);
         item.message.channel.send(`🎶 جاري تشغيل: **${item.title}**`);
@@ -454,20 +461,23 @@ client.on('messageCreate', async message => {
             if (query.startsWith('http')) {
                 if (query.includes('&list=')) query = query.split('&list=')[0];
                 if (query.includes('?list=')) query = query.split('?list=')[0];
-                
-                const type = await withTimeout(play.validate(query), 5000);
-                if (type === 'yt_playlist') {
-                    return message.reply('الرابط ده بلاي ليست كاملة، ابعت رابط أغنية واحدة بس!');
-                }
-                const info = await withTimeout(play.video_info(query), 5000);
-                track = { url: info.video_details.url, title: info.video_details.title };
             } else {
-                const searchResult = await withTimeout(play.search(query, { limit: 1 }), 5000);
-                if (!searchResult || searchResult.length === 0) {
-                    return message.reply('معرفتش ألاقي الأغنية دي!');
-                }
-                track = searchResult[0];
+                query = `ytsearch1:${query}`;
             }
+            
+            const output = await youtubedl(query, {
+                dumpJson: true,
+                noWarnings: true,
+                noCheckCertificates: true,
+                preferFreeFormats: true,
+                addHeader: ['referer:youtube.com', 'user-agent:Mozilla/5.0']
+            });
+            
+            const info = output.entries ? output.entries[0] : output;
+            if (!info) {
+                return message.reply('معرفتش ألاقي الأغنية دي!');
+            }
+            track = { url: info.webpage_url || info.url, title: info.title };
             
             queue.push({ type: 'music', url: track.url, title: track.title, message: { channel: message.channel } });
             message.reply(`✅ تم إضافة **${track.title}** للطابور!`);
