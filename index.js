@@ -229,7 +229,14 @@ async function generateAndPlayTTS(rawText) {
         const playUrl = `${host}/tts/${reqId}/${fileName}`;
         
         const node = shoukaku.options.nodeResolver(shoukaku.nodes);
-        const resolveResult = await node.rest.resolve(playUrl);
+        let resolveResult = await node.rest.resolve(playUrl);
+        
+        // لو فشل في جلب الملف المحلي (مثلاً لو شغالين لوكال أو الاستضافة بطيئة)، هنحول تلقائياً لـ Google TTS
+        if (!resolveResult || resolveResult.loadType !== 'track') {
+            console.log("Local TTS resolve failed, falling back to Google Translate TTS...");
+            const googleTtsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=ar&client=tw-ob`;
+            resolveResult = await node.rest.resolve(googleTtsUrl);
+        }
         
         if (resolveResult && resolveResult.loadType === 'track') {
             await voicePlayer.playTrack({ track: { encoded: resolveResult.data.encoded } });
@@ -511,10 +518,10 @@ client.on('messageCreate', async message => {
             return message.reply('لازم تدخلني الروم الأول باستخدام كوماند !join');
         }
 
-        const botVoiceChannelId = voicePlayer.connection.channelId;
-        const memberVoiceChannelId = message.member.voice.channelId;
+        const botVoiceChannelId = voicePlayer?.connection?.channelId;
+        const memberVoiceChannelId = message.member.voice?.channelId;
 
-        if (botVoiceChannelId !== memberVoiceChannelId) {
+        if (!botVoiceChannelId || botVoiceChannelId !== memberVoiceChannelId) {
             return message.reply('عشان تخليني أتكلم لازم تكون معايا في نفس الروم الصوتي!');
         }
 
@@ -655,10 +662,10 @@ client.on('messageCreate', async message => {
     if (message.content === '!stop') {
         if (!voicePlayer) return;
         
-        const botVoiceChannelId = voicePlayer.connection.channelId;
-        const memberVoiceChannelId = message.member.voice.channelId;
+        const botVoiceChannelId = voicePlayer?.connection?.channelId;
+        const memberVoiceChannelId = message.member.voice?.channelId;
 
-        if (botVoiceChannelId !== memberVoiceChannelId) {
+        if (!botVoiceChannelId || botVoiceChannelId !== memberVoiceChannelId) {
             return message.reply('عشان توقفني لازم تكون معايا في نفس الروم الصوتي!');
         }
 
