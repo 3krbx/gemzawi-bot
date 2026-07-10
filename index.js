@@ -13,6 +13,14 @@ const fs = require('fs');
 const play = require('play-dl');
 require('dotenv').config();
 
+// إضافة نظام حماية ضد التهنيج (Timeout) لو يوتيوب عمل بلوك للسيرفر
+const withTimeout = (promise, ms) => {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), ms))
+    ]);
+};
+
 // دوال حفظ واسترجاع بيانات العقوبات
 const PUNISHMENTS_FILE = path.join(__dirname, 'punishments.json');
 function loadPunishments() {
@@ -228,7 +236,7 @@ async function generateAndPlayTTS(rawText) {
 
 async function playMusic(item) {
     try {
-        const stream = await play.stream(item.url);
+        const stream = await withTimeout(play.stream(item.url), 10000);
         const resource = createAudioResource(stream.stream, {
             inputType: stream.type
         });
@@ -236,7 +244,7 @@ async function playMusic(item) {
         item.message.channel.send(`🎶 جاري تشغيل: **${item.title}**`);
     } catch (error) {
         console.error("Music Error:", error);
-        item.message.channel.send("❌ حصلت مشكلة في تشغيل الأغنية دي.");
+        item.message.channel.send("❌ يوتيوب رفض يشغل الأغنية دي (حظر السيرفر أو مهنج).");
         processNextInQueue();
     }
 }
@@ -412,14 +420,14 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
                 if (query.includes('&list=')) query = query.split('&list=')[0];
                 if (query.includes('?list=')) query = query.split('?list=')[0];
                 
-                const type = await play.validate(query);
+                const type = await withTimeout(play.validate(query), 5000);
                 if (type === 'yt_playlist') {
                     return interaction.editReply('الرابط ده بلاي ليست كاملة، ابعت رابط أغنية واحدة بس!');
                 }
-                const info = await play.video_info(query);
+                const info = await withTimeout(play.video_info(query), 5000);
                 track = { url: info.video_details.url, title: info.video_details.title };
             } else {
-                const searchResult = await play.search(query, { limit: 1 });
+                const searchResult = await withTimeout(play.search(query, { limit: 1 }), 5000);
                 if (!searchResult || searchResult.length === 0) {
                     return interaction.editReply('معرفتش ألاقي الأغنية دي!');
                 }
@@ -434,7 +442,7 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
             }
         } catch (err) {
             console.error("Play error:", err);
-            interaction.editReply('❌ حصلت مشكلة في البحث أو التشغيل!');
+            interaction.editReply('❌ يوتيوب رفض طلب البحث (ممكن يكون السيرفر واخد بلوك مؤقت)، جرب تاني كمان شوية!');
         }
     }
 
