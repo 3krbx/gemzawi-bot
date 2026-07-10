@@ -81,6 +81,26 @@ client.on('ready', async () => {
                     required: true,
                 }
             ]
+        },
+        {
+            name: 'play',
+            description: 'تشغيل أغنية من يوتيوب',
+            options: [
+                {
+                    name: 'query',
+                    type: ApplicationCommandOptionType.String,
+                    description: 'اسم الأغنية أو الرابط',
+                    required: true,
+                }
+            ]
+        },
+        {
+            name: 'skip',
+            description: 'تخطي الأغنية الحالية',
+        },
+        {
+            name: 'stop',
+            description: 'إيقاف البوت عن الكلام والغناء ومسح الطابور',
         }
     ];
 
@@ -365,6 +385,75 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
             }
         }
     }
+
+    if (interaction.commandName === 'play') {
+        if (!interaction.member.voice.channel) {
+            return interaction.reply({ content: 'لازم تدخل روم صوتي الأول!', ephemeral: true });
+        }
+        
+        if (!connection || connection.joinConfig.channelId !== interaction.member.voice.channel.id) {
+            connection = joinVoiceChannel({
+                channelId: interaction.member.voice.channel.id,
+                guildId: interaction.guild.id,
+                adapterCreator: interaction.guild.voiceAdapterCreator,
+            });
+            connection.subscribe(player);
+        }
+
+        const query = interaction.options.getString('query');
+        await interaction.deferReply();
+        
+        try {
+            let track;
+            if (query.startsWith('http')) {
+                const type = await play.validate(query);
+                if (type === 'yt_playlist') {
+                    return interaction.editReply('الرابط ده بلاي ليست، ابعت رابط أغنية واحدة بس عشان البوت ميهنجش!');
+                }
+                const info = await play.video_info(query);
+                track = { url: info.video_details.url, title: info.video_details.title };
+            } else {
+                const searchResult = await play.search(query, { limit: 1 });
+                if (!searchResult || searchResult.length === 0) {
+                    return interaction.editReply('معرفتش ألاقي الأغنية دي!');
+                }
+                track = searchResult[0];
+            }
+            
+            queue.push({ type: 'music', url: track.url, title: track.title, message: { channel: interaction.channel } });
+            await interaction.editReply(`✅ تم إضافة **${track.title}** للطابور!`);
+            
+            if (!isPlaying) {
+                processNextInQueue();
+            }
+        } catch (err) {
+            console.error("Play error:", err);
+            interaction.editReply('❌ حصلت مشكلة في البحث أو التشغيل!');
+        }
+    }
+
+    if (interaction.commandName === 'skip') {
+        if (!connection) return interaction.reply({ content: 'أنا مش في روم صوتي أصلاً!', ephemeral: true });
+        if (currentPlaybackType !== 'music') return interaction.reply({ content: 'مفيش أغنية شغالة عشان أتخطاها!', ephemeral: true });
+        
+        await interaction.reply('⏭️ تم التخطي!');
+        player.stop();
+    }
+
+    if (interaction.commandName === 'stop') {
+        if (!connection) return interaction.reply({ content: 'أنا مش في روم صوتي أصلاً!', ephemeral: true });
+        
+        const botVoiceChannelId = interaction.guild.members.me.voice.channelId;
+        const memberVoiceChannelId = interaction.member.voice.channelId;
+
+        if (botVoiceChannelId !== memberVoiceChannelId) {
+            return interaction.reply({ content: 'عشان توقفني لازم تكون معايا في نفس الروم الصوتي!', ephemeral: true });
+        }
+
+        queue = [];
+        player.stop();
+        await interaction.reply('🛑 سكت خلاص ومسحت كل الأغاني والكلام اللي في الطابور!');
+    }
 });
 
 client.on('messageCreate', async message => {
@@ -419,71 +508,7 @@ client.on('messageCreate', async message => {
             processNextInQueue();
         }
     }
-    
-    // كوماند الأغاني
-    if (message.content.startsWith('!play ')) {
-        if (!message.member.voice.channel) {
-            return message.reply('لازم تدخل روم صوتي الأول!');
-        }
-        
-        if (!connection || connection.joinConfig.channelId !== message.member.voice.channel.id) {
-            connection = joinVoiceChannel({
-                channelId: message.member.voice.channel.id,
-                guildId: message.guild.id,
-                adapterCreator: message.guild.voiceAdapterCreator,
-            });
-            connection.subscribe(player);
-        }
 
-        const query = message.content.slice(6).trim();
-        if (!query) return message.reply('اكتب اسم الأغنية أو الرابط بعد الكوماند!');
-        
-        message.react('🔍');
-        
-        try {
-            const searchResult = await play.search(query, { limit: 1 });
-            if (!searchResult || searchResult.length === 0) {
-                return message.reply('معرفتش ألاقي الأغنية دي!');
-            }
-            
-            const track = searchResult[0];
-            queue.push({ type: 'music', url: track.url, title: track.title, message });
-            message.reply(`✅ تم إضافة **${track.title}** للطابور!`);
-            
-            if (!isPlaying) {
-                processNextInQueue();
-            }
-        } catch (err) {
-            console.error("Play error:", err);
-            message.reply('حصلت مشكلة في البحث!');
-        }
-    }
-
-    // كوماند تخطي الأغنية
-    if (message.content === '!skip') {
-        if (!connection) return;
-        if (currentPlaybackType !== 'music') return message.reply('مفيش أغنية شغالة عشان أتخطاها!');
-        
-        message.reply('⏭️ تم التخطي!');
-        player.stop();
-    }
-    
-    // كوماند الإيقاف
-    if (message.content === '!stop') {
-        if (!connection) return;
-        
-        const botVoiceChannelId = message.guild.members.me.voice.channelId;
-        const memberVoiceChannelId = message.member.voice.channelId;
-
-        if (botVoiceChannelId !== memberVoiceChannelId) {
-            return message.reply('عشان توقفني لازم تكون معايا في نفس الروم الصوتي!');
-        }
-
-        queue = [];
-        player.stop();
-        message.react('🛑');
-        message.reply('سكت خلاص ومسحت كل الأغاني والكلام اللي في الطابور!');
-    }
 
     // كوماند الخروج
     if (message.content === '!leave') {
