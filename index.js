@@ -617,16 +617,34 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
             }
         }
 
-        // انضمام البوت وتحدثه بكلمة محكمة
+        // انضمام البوت
         voicePlayer = await safeJoinVoiceChannel({
             guild: guild,
             member: { voice: { channel: stageChannel } }
         });
         
-        if (voicePlayer) {
-            queue.push({ type: 'tts', text: 'مَحْكَمَة!' });
-            if (!isPlaying) processNextInQueue();
-        }
+        // رفع البوت والقاضي ومُنشئ الكوماند كمتحدثين (Speakers) بعد ثانية لضمان الدخول
+        setTimeout(async () => {
+            const botMem = guild.members.me;
+            if (botMem.voice.channelId === stageChannel.id) {
+                await botMem.voice.setSuppressed(false).catch(()=>{});
+            }
+            
+            const judgeMem = await guild.members.fetch(judge.id).catch(()=>null);
+            if (judgeMem && judgeMem.voice.channelId === stageChannel.id) {
+                await judgeMem.voice.setSuppressed(false).catch(()=>{});
+            }
+            
+            if (callerMember.voice.channelId === stageChannel.id) {
+                await callerMember.voice.setSuppressed(false).catch(()=>{});
+            }
+            
+            // تحدث البوت بكلمة محكمة
+            if (voicePlayer) {
+                queue.push({ type: 'tts', text: 'مَحْكَمَة!' });
+                if (!isPlaying) processNextInQueue();
+            }
+        }, 1500);
 
         return interaction.editReply(`⚖️ تم فتح قاعة المحكمة <#${stageChannel.id}>!\nتم سحب ${movedCount} عضو للجمهور.`);
     }
