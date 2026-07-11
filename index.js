@@ -6,15 +6,7 @@ const fs = require('fs');
 const { Shoukaku, Connectors } = require('shoukaku');
 require('dotenv').config();
 
-// دوال حفظ واسترجاع بيانات العقوبات
-const PUNISHMENTS_FILE = path.join(__dirname, 'punishments.json');
-function loadPunishments() {
-    if (!fs.existsSync(PUNISHMENTS_FILE)) return {};
-    try { return JSON.parse(fs.readFileSync(PUNISHMENTS_FILE, 'utf8')); } catch(e) { return {}; }
-}
-function savePunishments(data) {
-    fs.writeFileSync(PUNISHMENTS_FILE, JSON.stringify(data, null, 2), 'utf8');
-}
+const db = require('./database');
 // سيرفر ويب بسيط عشان الاستضافات المجانية (زي Render أو Koyeb) متقفلش البوت
 const express = require('express');
 const app = express();
@@ -92,6 +84,7 @@ const BLACKLIST = [];
 
 client.on('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
+    await db.initDB();
     
     // تسجيل السلاش كوماند في كل السيرفرات اللي البوت فيها (أسرع من التسجيل العالمي)
     const commandsData = [
@@ -124,6 +117,34 @@ client.on('ready', async () => {
                     required: true,
                 }
             ]
+        },
+        {
+            name: 'court',
+            description: 'بدء جلسة محكمة طارئة وسحب الجميع للمنصة',
+            options: [
+                {
+                    name: 'judge',
+                    type: ApplicationCommandOptionType.User,
+                    description: 'القاضي',
+                    required: true,
+                },
+                {
+                    name: 'accused',
+                    type: ApplicationCommandOptionType.User,
+                    description: 'المتهم',
+                    required: true,
+                },
+                {
+                    name: 'lawyer',
+                    type: ApplicationCommandOptionType.User,
+                    description: 'المحامي',
+                    required: true,
+                }
+            ]
+        },
+        {
+            name: 'endcourt',
+            description: 'إنهاء جلسة المحكمة وإرجاع الأسماء وحذف الروم',
         }
     ];
 
@@ -138,42 +159,37 @@ client.on('ready', async () => {
 
     // فحص العقوبات المنتهية كل دقيقة
     setInterval(async () => {
-        const data = loadPunishments();
-        let changed = false;
+        const punishments = await db.getPunishments();
         const now = Date.now();
 
-        for (const guildId in data) {
-            for (const userId in data[guildId]) {
-                const punishInfo = data[guildId][userId];
-                if (now >= punishInfo.unpunishAt) {
-                    try {
-                        const guild = await client.guilds.fetch(guildId).catch(()=>null);
-                        if (guild) {
-                            const member = await guild.members.fetch(userId).catch(()=>null);
-                            if (member) {
-                                // سحب رول العقاب
-                                const roleId = '1144243984949055538';
-                                await member.roles.remove(roleId).catch(()=>{});
-                                // استرجاع الرولات القديمة
-                                if (punishInfo.oldRoles && punishInfo.oldRoles.length > 0) {
-                                    for (const rId of punishInfo.oldRoles) {
-                                        await member.roles.add(rId).catch(()=>{});
-                                    }
+        for (const punishInfo of punishments) {
+            if (now >= punishInfo.unpunish_at) {
+                try {
+                    const guild = await client.guilds.fetch(punishInfo.guild_id).catch(()=>null);
+                    if (guild) {
+                        const member = await guild.members.fetch(punishInfo.user_id).catch(()=>null);
+                        if (member) {
+                            // سحب رول العقاب
+                            const roleId = '1144243984949055538';
+                            await member.roles.remove(roleId).catch(()=>{});
+                            // استرجاع الرولات القديمة
+                            const oldRoles = JSON.parse(punishInfo.old_roles);
+                            if (oldRoles && oldRoles.length > 0) {
+                                for (const rId of oldRoles) {
+                                    await member.roles.add(rId).catch(()=>{});
                                 }
-                                // استرجاع الاسم
-                                await member.setNickname(punishInfo.oldName).catch(()=>{});
                             }
+                            // استرجاع الاسم
+                            await member.setNickname(punishInfo.old_name).catch(()=>{});
                         }
-                    } catch (e) {
-                        console.error("Error restoring user", e);
                     }
-                    
-                    delete data[guildId][userId];
-                    changed = true;
+                } catch (e) {
+                    console.error("Error restoring user", e);
                 }
+                
+                await db.removePunishment(punishInfo.guild_id, punishInfo.user_id);
             }
         }
-        if (changed) savePunishments(data);
     }, 60000);
 });
 
@@ -500,15 +516,8 @@ client.on('interactionCreate', async interaction => {
             nameChanged = false;
         }
 
-        // تسجيل العقوبة في الملف بالمدة المحددة
-        const data = loadPunishments();
-        if (!data[interaction.guild.id]) data[interaction.guild.id] = {};
-        data[interaction.guild.id][member.id] = {
-            oldName: oldName,
-            oldRoles: oldRoles,
-            unpunishAt: Date.now() + (durationHours * 60 * 60 * 1000)
-        };
-        savePunishments(data);
+        // تسجيل العقوبة في قاعدة البيانات
+        await db.addPunishment(interaction.guild.id, member.id, oldName, oldRoles, Date.now() + (durationHours * 60 * 60 * 1000));
             
         // الرسالة الرسمية بتنزل عادي في كل الحالات
         const officialMessage = `
@@ -549,6 +558,108 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
                 await interaction.reply({ content: 'حصلت مشكلة وأنا ببعت رسالة البيان!', ephemeral: true });
             }
         }
+    }
+
+    if (interaction.commandName === 'court') {
+        await interaction.deferReply();
+        const judge = interaction.options.getUser('judge');
+        const accused = interaction.options.getUser('accused');
+        const lawyer = interaction.options.getUser('lawyer');
+
+        const guild = interaction.guild;
+        const callerMember = interaction.member;
+        
+        if (!callerMember.permissions.has('ManageChannels')) {
+            return interaction.editReply('ليس لديك صلاحيات لفتح قاعة المحكمة!');
+        }
+
+        const stageChannel = await guild.channels.create({
+            name: '⚖️ المحكمة الطارئة',
+            type: 13, // Stage Channel
+            permissionOverwrites: [
+                {
+                    id: guild.roles.everyone.id,
+                    allow: ['Connect', 'ViewChannel'],
+                    deny: ['Speak', 'RequestToSpeak']
+                },
+                {
+                    id: client.user.id,
+                    allow: ['Connect', 'ViewChannel', 'Speak', 'ManageChannels', 'MuteMembers', 'MoveMembers', 'ManageRoles']
+                },
+                {
+                    id: callerMember.id,
+                    allow: ['Connect', 'ViewChannel', 'Speak', 'ManageChannels', 'MuteMembers', 'MoveMembers', 'ManageRoles']
+                },
+                {
+                    id: judge.id,
+                    allow: ['Connect', 'ViewChannel', 'Speak', 'ManageChannels', 'MuteMembers', 'MoveMembers', 'ManageRoles']
+                }
+            ]
+        });
+
+        const accusedMember = await guild.members.fetch(accused.id).catch(() => null);
+        const lawyerMember = await guild.members.fetch(lawyer.id).catch(() => null);
+
+        const accusedOldName = accusedMember ? accusedMember.nickname : null;
+        const lawyerOldName = lawyerMember ? lawyerMember.nickname : null;
+
+        await db.saveCourtSession(guild.id, stageChannel.id, accused.id, lawyer.id, accusedOldName, lawyerOldName);
+
+        if (accusedMember) await accusedMember.setNickname(`[المتهم] ${accusedMember.user.username}`).catch(()=>{});
+        if (lawyerMember) await lawyerMember.setNickname(`[المحامي] ${lawyerMember.user.username}`).catch(()=>{});
+
+        let movedCount = 0;
+        const voiceChannels = guild.channels.cache.filter(c => c.isVoiceBased() && c.id !== stageChannel.id);
+        for (const [id, vc] of voiceChannels) {
+            for (const [mId, member] of vc.members) {
+                await member.voice.setChannel(stageChannel).catch(()=>{});
+                movedCount++;
+            }
+        }
+
+        // انضمام البوت وتحدثه بكلمة محكمة
+        voicePlayer = await safeJoinVoiceChannel({
+            guild: guild,
+            member: { voice: { channel: stageChannel } }
+        });
+        
+        if (voicePlayer) {
+            queue.push({ type: 'tts', text: 'مَحْكَمَة!' });
+            if (!isPlaying) processNextInQueue();
+        }
+
+        return interaction.editReply(`⚖️ تم فتح قاعة المحكمة <#${stageChannel.id}>!\nتم سحب ${movedCount} عضو للجمهور.`);
+    }
+
+    if (interaction.commandName === 'endcourt') {
+        await interaction.deferReply();
+        const callerMember = interaction.member;
+        
+        if (!callerMember.permissions.has('ManageChannels')) {
+            return interaction.editReply('ليس لديك صلاحيات لإنهاء قاعة المحكمة!');
+        }
+
+        const sessions = await db.getGuildCourtSessions(interaction.guild.id);
+        if (!sessions || sessions.length === 0) {
+            return interaction.editReply('لا توجد جلسات محكمة مفتوحة حالياً!');
+        }
+
+        let closedCount = 0;
+        for (const session of sessions) {
+            const channel = interaction.guild.channels.cache.get(session.stage_channel_id);
+            if (channel) await channel.delete().catch(()=>{});
+
+            const accusedMember = await interaction.guild.members.fetch(session.accused_id).catch(()=>null);
+            const lawyerMember = await interaction.guild.members.fetch(session.lawyer_id).catch(()=>null);
+
+            if (accusedMember) await accusedMember.setNickname(session.accused_old_name).catch(()=>{});
+            if (lawyerMember) await lawyerMember.setNickname(session.lawyer_old_name).catch(()=>{});
+
+            await db.removeCourtSession(session.guild_id, session.stage_channel_id);
+            closedCount++;
+        }
+
+        return interaction.editReply(`تم إغلاق ${closedCount} جلسة محكمة وإرجاع الأسماء القديمة!`);
     }
 });
 
