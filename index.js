@@ -261,13 +261,23 @@ async function generateAndPlayTTS(rawText) {
         const playUrl = `${host}/tts/${reqId}/${fileName}`;
         
         const node = shoukaku.options.nodeResolver(shoukaku.nodes);
-        let resolveResult = await node.rest.resolve(playUrl);
+        let resolveResult = null;
+        
+        try {
+            resolveResult = await node.rest.resolve(playUrl);
+        } catch (resolveError) {
+            console.error("Lavalink failed to resolve local TTS, triggering fallback...");
+        }
         
         // لو فشل في جلب الملف المحلي (مثلاً لو شغالين لوكال أو الاستضافة بطيئة)، هنحول تلقائياً لـ Google TTS
         if (!resolveResult || resolveResult.loadType !== 'track') {
             console.log("Local TTS resolve failed, falling back to Google Translate TTS...");
             const googleTtsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=ar&client=tw-ob`;
-            resolveResult = await node.rest.resolve(googleTtsUrl);
+            try {
+                resolveResult = await node.rest.resolve(googleTtsUrl);
+            } catch (googleError) {
+                console.error("Google TTS fallback also failed to resolve.");
+            }
         }
         
         if (resolveResult && resolveResult.loadType === 'track') {
