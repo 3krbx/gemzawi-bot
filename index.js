@@ -46,7 +46,10 @@ const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), [
     restTimeout: 10000
 });
 
-shoukaku.on('error', (name, error) => console.error(`Shoukaku Node ${name} Error:`, error.message || error));
+shoukaku.on('error', (name, error) => {
+    const err = error || name;
+    console.error(`Shoukaku Error:`, err?.message || err);
+});
 shoukaku.on('ready', (name) => console.log(`Lavalink Node ${name} connected!`));
 shoukaku.on('disconnect', (name) => console.log(`Lavalink Node ${name} disconnected`));
 
@@ -55,6 +58,34 @@ let queue = [];
 let isPlaying = false;
 let currentResourceFile = null;
 let currentPlaybackType = null;
+
+async function safeJoinVoiceChannel(message) {
+    try {
+        return await shoukaku.joinVoiceChannel({
+            guildId: message.guild.id,
+            channelId: message.member.voice.channel.id,
+            shardId: 0
+        });
+    } catch (error) {
+        if (error.message && error.message.includes("existing connection")) {
+            console.log(`Connection exists for ${message.guild.id}, leaving and rejoining...`);
+            try {
+                await shoukaku.leaveVoiceChannel(message.guild.id);
+                await new Promise(r => setTimeout(r, 500));
+                return await shoukaku.joinVoiceChannel({
+                    guildId: message.guild.id,
+                    channelId: message.member.voice.channel.id,
+                    shardId: 0
+                });
+            } catch (retryError) {
+                console.error("Failed to rejoin after leaving:", retryError);
+                return null;
+            }
+        }
+        console.error("Failed to join voice channel:", error);
+        return null;
+    }
+}
 
 // قائمة البلاك ليست (الأيديهات الممنوعة من استخدام البوت)
 const BLACKLIST = [];
@@ -473,11 +504,10 @@ client.on('messageCreate', async message => {
                 isNewPlayer = true;
             }
             
-            voicePlayer = await shoukaku.joinVoiceChannel({
-                guildId: message.guild.id,
-                channelId: message.member.voice.channel.id,
-                shardId: 0
-            });
+            voicePlayer = await safeJoinVoiceChannel(message);
+            if (!voicePlayer) {
+                return message.reply('❌ حصلت مشكلة وأنا بحاول أدخل الروم! (ممكن سيرفر الصوت فيه مشكلة)');
+            }
             
             if (isNewPlayer) {
                 voicePlayer.on('end', (data) => {
@@ -550,11 +580,10 @@ client.on('messageCreate', async message => {
             isNewPlayer = true;
         }
         
-        voicePlayer = await shoukaku.joinVoiceChannel({
-            guildId: message.guild.id,
-            channelId: message.member.voice.channel.id,
-            shardId: 0
-        });
+        voicePlayer = await safeJoinVoiceChannel(message);
+        if (!voicePlayer) {
+            return message.reply('❌ حصلت مشكلة وأنا بحاول أدخل الروم! (ممكن سيرفر الصوت فيه مشكلة)');
+        }
         
         if (isNewPlayer) {
             voicePlayer.on('end', (data) => {
