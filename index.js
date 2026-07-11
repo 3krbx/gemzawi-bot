@@ -217,6 +217,48 @@ function addSmartPunctuation(text) {
     return text.replace(/\s+/g, ' ').trim();
 }
 
+// تشكيل الكلمات العامية عشان الذكاء الاصطناعي ينطقها مصري صح بدل الفصحى
+function egyptianizeText(text) {
+    const slangMap = {
+        'يعم': 'يا عَم',
+        'ياعم': 'يا عَم',
+        'عشان': 'عَشان',
+        'علشان': 'عَلَشان',
+        'ليه': 'لِيه',
+        'ايه': 'إِيه',
+        'إيه': 'إِيه',
+        'مين': 'مِين',
+        'بقولك': 'بَقُولَّك',
+        'ازاي': 'إِزَّاي',
+        'إزاي': 'إِزَّاي',
+        'كده': 'كِدَه',
+        'كدا': 'كِدَا',
+        'دي': 'دِي',
+        'ده': 'دَه',
+        'دا': 'دَا',
+        'بجد': 'بِجَد',
+        'طب': 'طَب',
+        'طيب': 'طَيِّب',
+        'اومال': 'أُمَّال',
+        'فين': 'فِين',
+        'بكام': 'بِكَام',
+        'لول': 'لُول',
+        'يسطا': 'يَاسْطَا',
+        'ياسطا': 'يَاسْطَا',
+        'يعني': 'يَعْنِي',
+        'امتى': 'إِمْتَى',
+        'إمتى': 'إِمْتَى',
+        'بتاع': 'بِتَاع'
+    };
+
+    for (const [slang, correct] of Object.entries(slangMap)) {
+        const regex = new RegExp(`(^|\\s)${slang}(\\s|$)`, 'g');
+        text = text.replace(regex, `$1${correct}$2`);
+    }
+    
+    return text;
+}
+
 function cleanupCurrentResourceFile() {
     if (currentResourceFile) {
         try {
@@ -239,6 +281,7 @@ function cleanupCurrentResourceFile() {
 async function generateAndPlayTTS(rawText) {
     let text = convertFranco(rawText); // تحويل الفرانكو أولاً
     text = addSmartPunctuation(text);  // إضافة الترقيم الذكي عشان الطلاقة
+    text = egyptianizeText(text); // تشكيل الكلمات باللهجة المصرية
     text = "، " + text; // إضافة فترة صمت قصيرة في البداية لتجنب قطع أول حرف
     
     const tts = new MsEdgeTTS();
