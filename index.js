@@ -116,6 +116,12 @@ client.on('ready', async () => {
                     type: ApplicationCommandOptionType.String,
                     description: 'سبب العقاب',
                     required: true,
+                },
+                {
+                    name: 'duration_minutes',
+                    type: ApplicationCommandOptionType.Integer,
+                    description: 'مدة العقاب بالدقائق',
+                    required: true,
                 }
             ]
         }
@@ -279,7 +285,7 @@ function cleanupCurrentResourceFile() {
 
 // دالة توليد وتشغيل الصوت
 async function generateAndPlayTTS(rawText) {
-    let text = convertFranco(rawText); // تحويل الفرانكو أولاً
+    let text = rawText; // تم إلغاء تحويل الفرانكو ليقرأ البوت الحروف الإنجليزية بنطقها السليم
     text = addSmartPunctuation(text);  // إضافة الترقيم الذكي عشان الطلاقة
     text = egyptianizeText(text); // تشكيل الكلمات باللهجة المصرية
     text = "، " + text; // إضافة فترة صمت قصيرة في البداية لتجنب قطع أول حرف
@@ -449,6 +455,7 @@ client.on('interactionCreate', async interaction => {
         const user = interaction.options.getUser('user');
         const newName = interaction.options.getString('new_name');
         const reason = interaction.options.getString('reason');
+        const durationMinutes = interaction.options.getInteger('duration_minutes');
 
         const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
@@ -493,13 +500,13 @@ client.on('interactionCreate', async interaction => {
             nameChanged = false;
         }
 
-        // تسجيل العقوبة في الملف لمدة 24 ساعة
+        // تسجيل العقوبة في الملف بالمدة المحددة
         const data = loadPunishments();
         if (!data[interaction.guild.id]) data[interaction.guild.id] = {};
         data[interaction.guild.id][member.id] = {
             oldName: oldName,
             oldRoles: oldRoles,
-            unpunishAt: Date.now() + (24 * 60 * 60 * 1000)
+            unpunishAt: Date.now() + (durationMinutes * 60 * 1000)
         };
         savePunishments(data);
             
