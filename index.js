@@ -118,9 +118,9 @@ client.on('ready', async () => {
                     required: true,
                 },
                 {
-                    name: 'duration_minutes',
+                    name: 'duration_hours',
                     type: ApplicationCommandOptionType.Integer,
-                    description: 'مدة العقاب بالدقائق',
+                    description: 'مدة العقاب بالساعات',
                     required: true,
                 }
             ]
@@ -455,7 +455,7 @@ client.on('interactionCreate', async interaction => {
         const user = interaction.options.getUser('user');
         const newName = interaction.options.getString('new_name');
         const reason = interaction.options.getString('reason');
-        const durationMinutes = interaction.options.getInteger('duration_minutes');
+        const durationHours = interaction.options.getInteger('duration_hours');
 
         const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
@@ -506,7 +506,7 @@ client.on('interactionCreate', async interaction => {
         data[interaction.guild.id][member.id] = {
             oldName: oldName,
             oldRoles: oldRoles,
-            unpunishAt: Date.now() + (durationMinutes * 60 * 1000)
+            unpunishAt: Date.now() + (durationHours * 60 * 60 * 1000)
         };
         savePunishments(data);
             
@@ -520,7 +520,7 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
 عزل المخصي : <@${member.id}> **و تم تغير اسمه ل ${newName} + رول البيضة**
 
 السبب : ${reason}
-المدة : ${durationMinutes} دقيقة
+المدة : ${durationHours} ساعة
 
 **يُنفذ القرار فوراً ويُضرب بيد من حديد على كل من سولت له نفسه الاستظراف و الاستخفاف ببيضنا.**
 
