@@ -597,6 +597,13 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
             ]
         });
 
+        // إنشاء جلسة بث للمنصة لكي نتمكن من رفع المتحدثين
+        await guild.stageInstances.create({
+            channel: stageChannel.id,
+            topic: '⚖️ المحكمة الطارئة',
+            privacyLevel: 2 // GuildOnly
+        }).catch(err => console.error("Error creating stage instance:", err));
+
         const accusedMember = await guild.members.fetch(accused.id).catch(() => null);
         const lawyerMember = await guild.members.fetch(lawyer.id).catch(() => null);
 
@@ -644,7 +651,7 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
                 queue.push({ type: 'tts', text: 'مَحْكَمَة!' });
                 if (!isPlaying) processNextInQueue();
             }
-        }, 1500);
+        }, 2500);
 
         return interaction.editReply(`⚖️ تم فتح قاعة المحكمة <#${stageChannel.id}>!\nتم سحب ${movedCount} عضو للجمهور.`);
     }
