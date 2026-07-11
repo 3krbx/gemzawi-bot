@@ -239,16 +239,17 @@ function cleanupCurrentResourceFile() {
 async function generateAndPlayTTS(rawText) {
     let text = convertFranco(rawText); // تحويل الفرانكو أولاً
     text = addSmartPunctuation(text);  // إضافة الترقيم الذكي عشان الطلاقة
+    text = "، " + text; // إضافة فترة صمت قصيرة في البداية لتجنب قطع أول حرف
     
     const tts = new MsEdgeTTS();
-    await tts.setMetadata('ar-EG-SalmaNeural', OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
+    await tts.setMetadata('ar-EG-SalmaNeural', OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
     
     const reqId = `tts-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const reqDir = path.join(ttsDir, reqId);
     fs.mkdirSync(reqDir);
     
     try {
-        const filePath = path.join(reqDir, 'output.webm');
+        const filePath = path.join(reqDir, 'output.mp3');
         const result = await tts.toFile(reqDir, text);
         const actualFilePath = result.audioFilePath || filePath; 
         
