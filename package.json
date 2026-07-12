@@ -25,8 +25,6 @@
     "play-dl": "^1.9.7",
     "shoukaku": "^4.3.0",
     "soundcloud.ts": "^0.7.4",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^6.0.1",
     "youtube-dl-exec": "^3.1.9",
     "yt-search": "^2.13.1"
   }
