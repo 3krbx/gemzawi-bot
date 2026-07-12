@@ -468,6 +468,8 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.commandName === 'punish') {
+        await interaction.deferReply({ ephemeral: true });
+        
         const user = interaction.options.getUser('user');
         const newName = interaction.options.getString('new_name');
         const reason = interaction.options.getString('reason');
