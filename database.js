@@ -31,6 +31,14 @@ async function initDB() {
         );
     `);
     
+    // Add judge columns safely if they don't exist
+    try {
+        await db.exec(`ALTER TABLE court_sessions ADD COLUMN judge_id TEXT;`);
+        await db.exec(`ALTER TABLE court_sessions ADD COLUMN judge_old_name TEXT;`);
+    } catch (e) {
+        // Ignore errors if columns already exist
+    }
+    
     console.log("Database initialized successfully!");
 }
 
@@ -52,10 +60,10 @@ async function removePunishment(guildId, userId) {
 }
 
 // Court Sessions
-async function saveCourtSession(guildId, channelId, accusedId, lawyerId, accusedOldName, lawyerOldName) {
+async function saveCourtSession(guildId, channelId, accusedId, lawyerId, accusedOldName, lawyerOldName, judgeId, judgeOldName) {
     await db.run(
-        `INSERT INTO court_sessions (guild_id, stage_channel_id, accused_id, lawyer_id, accused_old_name, lawyer_old_name) VALUES (?, ?, ?, ?, ?, ?)`,
-        [guildId, channelId, accusedId, lawyerId, accusedOldName, lawyerOldName]
+        `INSERT OR REPLACE INTO court_sessions (guild_id, stage_channel_id, accused_id, lawyer_id, accused_old_name, lawyer_old_name, judge_id, judge_old_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [guildId, channelId, accusedId, lawyerId, accusedOldName, lawyerOldName, judgeId, judgeOldName]
     );
 }
 

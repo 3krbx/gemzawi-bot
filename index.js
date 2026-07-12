@@ -550,13 +550,13 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
         }
 
         try {
-            await interaction.reply({ content: replyText, ephemeral: true });
+            await interaction.editReply({ content: replyText });
             await interaction.channel.send(officialMessage);
         } catch (error) {
             console.error("Couldn't send messages:", error);
-            if (!interaction.replied) {
-                await interaction.reply({ content: 'حصلت مشكلة وأنا ببعت رسالة البيان!', ephemeral: true });
-            }
+            try {
+                await interaction.editReply({ content: 'حصلت مشكلة وأنا ببعت رسالة البيان!' });
+            } catch (e) {}
         }
     }
 
@@ -598,22 +598,34 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
         });
 
         // إنشاء جلسة بث للمنصة لكي نتمكن من رفع المتحدثين
-        await guild.stageInstances.create({
-            channel: stageChannel.id,
-            topic: '⚖️ المحكمة الطارئة',
-            privacyLevel: 2 // GuildOnly
-        }).catch(err => console.error("Error creating stage instance:", err));
+        try {
+            await guild.stageInstances.create({
+                channel: stageChannel.id,
+                topic: '⚖️ المحكمة الطارئة'
+            });
+        } catch (err) {
+            console.error("Error creating stage instance:", err);
+            // الانتظار ثانية والمحاولة مرة أخرى
+            await new Promise(r => setTimeout(r, 1000));
+            await guild.stageInstances.create({
+                channel: stageChannel.id,
+                topic: '⚖️ المحكمة الطارئة'
+            }).catch(e => console.error("Retry failed:", e));
+        }
 
         const accusedMember = await guild.members.fetch(accused.id).catch(() => null);
         const lawyerMember = await guild.members.fetch(lawyer.id).catch(() => null);
+        const judgeMember = await guild.members.fetch(judge.id).catch(() => null);
 
         const accusedOldName = accusedMember ? accusedMember.nickname : null;
         const lawyerOldName = lawyerMember ? lawyerMember.nickname : null;
+        const judgeOldName = judgeMember ? judgeMember.nickname : null;
 
-        await db.saveCourtSession(guild.id, stageChannel.id, accused.id, lawyer.id, accusedOldName, lawyerOldName);
+        await db.saveCourtSession(guild.id, stageChannel.id, accused.id, lawyer.id, accusedOldName, lawyerOldName, judge.id, judgeOldName);
 
         if (accusedMember) await accusedMember.setNickname(`[المتهم] ${accusedMember.user.username}`).catch(()=>{});
         if (lawyerMember) await lawyerMember.setNickname(`[المحامي] ${lawyerMember.user.username}`).catch(()=>{});
+        if (judgeMember) await judgeMember.setNickname(`[القاضي] ${judgeMember.user.username}`).catch(()=>{});
 
         let movedCount = 0;
         const voiceChannels = guild.channels.cache.filter(c => c.isVoiceBased() && c.id !== stageChannel.id);
@@ -630,28 +642,35 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
             member: { voice: { channel: stageChannel } }
         });
         
-        // رفع البوت والقاضي ومُنشئ الكوماند كمتحدثين (Speakers) بعد ثانية لضمان الدخول
-        setTimeout(async () => {
-            const botMem = guild.members.me;
-            if (botMem.voice.channelId === stageChannel.id) {
-                await botMem.voice.setSuppressed(false).catch(()=>{});
-            }
-            
-            const judgeMem = await guild.members.fetch(judge.id).catch(()=>null);
-            if (judgeMem && judgeMem.voice.channelId === stageChannel.id) {
-                await judgeMem.voice.setSuppressed(false).catch(()=>{});
-            }
-            
-            if (callerMember.voice.channelId === stageChannel.id) {
-                await callerMember.voice.setSuppressed(false).catch(()=>{});
-            }
-            
-            // تحدث البوت بكلمة محكمة
+        // دالة لرفع العضو كمتحدث مع المحاولة عدة مرات حتى تنجح (لأن الديسكورد يأخذ وقت لاستيعاب النقل)
+        const makeSpeaker = (memberId) => {
+            let attempts = 0;
+            const interval = setInterval(async () => {
+                attempts++;
+                const mem = await guild.members.fetch(memberId).catch(() => null);
+                if (mem && mem.voice.channelId === stageChannel.id) {
+                    try {
+                        await mem.voice.setSuppressed(false);
+                        clearInterval(interval);
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+                if (attempts > 15) clearInterval(interval); // استسلام بعد 15 ثانية
+            }, 1000);
+        };
+
+        makeSpeaker(client.user.id);
+        makeSpeaker(judge.id);
+        makeSpeaker(callerMember.id);
+
+        // تحدث البوت بكلمة محكمة بعد 3 ثواني
+        setTimeout(() => {
             if (voicePlayer) {
                 queue.push({ type: 'tts', text: 'مَحْكَمَة!' });
                 if (!isPlaying) processNextInQueue();
             }
-        }, 2500);
+        }, 3000);
 
         return interaction.editReply(`⚖️ تم فتح قاعة المحكمة <#${stageChannel.id}>!\nتم سحب ${movedCount} عضو للجمهور.`);
     }
@@ -676,9 +695,11 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
 
             const accusedMember = await interaction.guild.members.fetch(session.accused_id).catch(()=>null);
             const lawyerMember = await interaction.guild.members.fetch(session.lawyer_id).catch(()=>null);
+            const judgeMember = session.judge_id ? await interaction.guild.members.fetch(session.judge_id).catch(()=>null) : null;
 
             if (accusedMember) await accusedMember.setNickname(session.accused_old_name).catch(()=>{});
             if (lawyerMember) await lawyerMember.setNickname(session.lawyer_old_name).catch(()=>{});
+            if (judgeMember) await judgeMember.setNickname(session.judge_old_name).catch(()=>{});
 
             await db.removeCourtSession(session.guild_id, session.stage_channel_id);
             closedCount++;
