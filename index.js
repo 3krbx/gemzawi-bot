@@ -52,7 +52,14 @@ let currentResourceFile = null;
 let currentPlaybackType = null;
 
 async function safeJoinVoiceChannel(message) {
+    // If the bot is already in the same channel and we have a player, just return it
+    const botMem = message.guild.members.me;
+    if (voicePlayer && botMem && botMem.voice.channelId === message.member.voice.channel.id) {
+        return voicePlayer;
+    }
+
     try {
+        // If moving to a different channel or not connected
         return await shoukaku.joinVoiceChannel({
             guildId: message.guild.id,
             channelId: message.member.voice.channel.id,
@@ -63,7 +70,7 @@ async function safeJoinVoiceChannel(message) {
             console.log(`Connection exists for ${message.guild.id}, leaving and rejoining...`);
             try {
                 await shoukaku.leaveVoiceChannel(message.guild.id);
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 1000));
                 return await shoukaku.joinVoiceChannel({
                     guildId: message.guild.id,
                     channelId: message.member.voice.channel.id,
@@ -721,6 +728,13 @@ client.on('messageCreate', async message => {
     if (message.content === '!join') {
         if (message.member.voice.channel) {
             let isNewPlayer = false;
+            
+            // تحقق لو البوت موجود أصلاً في نفس الروم
+            const botVoiceChannelId = message.guild.members.me?.voice?.channelId;
+            if (voicePlayer && botVoiceChannelId === message.member.voice.channel.id) {
+                return message.reply('أنا معاك في الروم بالفعل! 🎤');
+            }
+
             if (!voicePlayer) {
                 isNewPlayer = true;
             }
