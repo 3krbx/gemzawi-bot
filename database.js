@@ -1,82 +1,81 @@
-const sqlite3 = require('sqlite3').verbose();
-const { open } = require('sqlite');
+const fs = require('fs');
 const path = require('path');
 
-let db;
+const DB_FILE = path.join(__dirname, 'database.json');
+
+let dbData = {
+    punishments: [],
+    court_sessions: []
+};
 
 async function initDB() {
-    db = await open({
-        filename: path.join(__dirname, 'database.sqlite'),
-        driver: sqlite3.Database
-    });
-
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS punishments (
-            guild_id TEXT,
-            user_id TEXT,
-            old_name TEXT,
-            old_roles TEXT,
-            unpunish_at INTEGER,
-            PRIMARY KEY (guild_id, user_id)
-        );
-        
-        CREATE TABLE IF NOT EXISTS court_sessions (
-            guild_id TEXT,
-            stage_channel_id TEXT,
-            accused_id TEXT,
-            lawyer_id TEXT,
-            accused_old_name TEXT,
-            lawyer_old_name TEXT,
-            PRIMARY KEY (guild_id, stage_channel_id)
-        );
-    `);
-    
-    // Add judge columns safely if they don't exist
-    try {
-        await db.exec(`ALTER TABLE court_sessions ADD COLUMN judge_id TEXT;`);
-        await db.exec(`ALTER TABLE court_sessions ADD COLUMN judge_old_name TEXT;`);
-    } catch (e) {
-        // Ignore errors if columns already exist
+    if (fs.existsSync(DB_FILE)) {
+        try {
+            const data = fs.readFileSync(DB_FILE, 'utf8');
+            dbData = JSON.parse(data);
+        } catch (e) {
+            console.error("Error reading database.json:", e);
+        }
+    } else {
+        saveDB();
     }
-    
     console.log("Database initialized successfully!");
+}
+
+function saveDB() {
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2), 'utf8');
 }
 
 // Punishments
 async function addPunishment(guildId, userId, oldName, oldRolesArray, unpunishAt) {
     const rolesStr = JSON.stringify(oldRolesArray || []);
-    await db.run(
-        `INSERT OR REPLACE INTO punishments (guild_id, user_id, old_name, old_roles, unpunish_at) VALUES (?, ?, ?, ?, ?)`,
-        [guildId, userId, oldName, rolesStr, unpunishAt]
-    );
+    dbData.punishments = dbData.punishments.filter(p => !(p.guild_id === guildId && p.user_id === userId));
+    dbData.punishments.push({
+        guild_id: guildId,
+        user_id: userId,
+        old_name: oldName,
+        old_roles: rolesStr,
+        unpunish_at: unpunishAt
+    });
+    saveDB();
 }
 
 async function getPunishments() {
-    return await db.all(`SELECT * FROM punishments`);
+    return dbData.punishments;
 }
 
 async function removePunishment(guildId, userId) {
-    await db.run(`DELETE FROM punishments WHERE guild_id = ? AND user_id = ?`, [guildId, userId]);
+    dbData.punishments = dbData.punishments.filter(p => !(p.guild_id === guildId && p.user_id === userId));
+    saveDB();
 }
 
 // Court Sessions
 async function saveCourtSession(guildId, channelId, accusedId, lawyerId, accusedOldName, lawyerOldName, judgeId, judgeOldName) {
-    await db.run(
-        `INSERT OR REPLACE INTO court_sessions (guild_id, stage_channel_id, accused_id, lawyer_id, accused_old_name, lawyer_old_name, judge_id, judge_old_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [guildId, channelId, accusedId, lawyerId, accusedOldName, lawyerOldName, judgeId, judgeOldName]
-    );
+    dbData.court_sessions = dbData.court_sessions.filter(c => !(c.guild_id === guildId && c.stage_channel_id === channelId));
+    dbData.court_sessions.push({
+        guild_id: guildId,
+        stage_channel_id: channelId,
+        accused_id: accusedId,
+        lawyer_id: lawyerId,
+        accused_old_name: accusedOldName,
+        lawyer_old_name: lawyerOldName,
+        judge_id: judgeId,
+        judge_old_name: judgeOldName
+    });
+    saveDB();
 }
 
 async function getCourtSession(guildId, channelId) {
-    return await db.get(`SELECT * FROM court_sessions WHERE guild_id = ? AND stage_channel_id = ?`, [guildId, channelId]);
+    return dbData.court_sessions.find(c => c.guild_id === guildId && c.stage_channel_id === channelId);
 }
 
 async function getGuildCourtSessions(guildId) {
-    return await db.all(`SELECT * FROM court_sessions WHERE guild_id = ?`, [guildId]);
+    return dbData.court_sessions.filter(c => c.guild_id === guildId);
 }
 
 async function removeCourtSession(guildId, channelId) {
-    await db.run(`DELETE FROM court_sessions WHERE guild_id = ? AND stage_channel_id = ?`, [guildId, channelId]);
+    dbData.court_sessions = dbData.court_sessions.filter(c => !(c.guild_id === guildId && c.stage_channel_id === channelId));
+    saveDB();
 }
 
 module.exports = {
