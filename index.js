@@ -791,7 +791,7 @@ client.on('messageCreate', async message => {
         }
 
         const text = message.content.slice(5);
-        message.react('🗣️');
+        message.react('🗣️').catch(()=>{});
         
         // نظام المقاطعة: وقف الأغاني وشغل الكلام
         queue = queue.filter(item => item.type === 'tts');
@@ -800,6 +800,10 @@ client.on('messageCreate', async message => {
         if (currentPlaybackType === 'music') {
             await voicePlayer.stopTrack(); 
         } else if (!isPlaying) {
+            processNextInQueue();
+        } else if (voicePlayer && !voicePlayer.track) {
+            // حالة التعليق: لو البوت بيقول إنه شغال بس مفيش تراك بيتلعب فعلياً
+            isPlaying = false;
             processNextInQueue();
         }
     }
@@ -845,7 +849,7 @@ client.on('messageCreate', async message => {
         const rawQuery = message.content.slice(6).trim();
         if (!rawQuery) return message.reply('اكتب اسم الأغنية أو الرابط بعد الكوماند!');
         
-        message.react('🔍');
+        message.react('🔍').catch(()=>{});
         
         try {
             // تقسيم الكويري باستخدام الفاصلة العادية والعربية
@@ -934,8 +938,10 @@ client.on('messageCreate', async message => {
         }
 
         queue = [];
+        isPlaying = false;
+        currentPlaybackType = null;
         await voicePlayer.stopTrack();
-        message.react('🛑');
+        message.react('🛑').catch(()=>{});
         message.reply('سكت خلاص ومسحت كل الأغاني والكلام اللي في الطابور!');
     }
 
