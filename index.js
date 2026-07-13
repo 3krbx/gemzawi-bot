@@ -28,13 +28,15 @@ const client = new Client({
 });
 
 const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), [
+    { name: 'Kanna', url: 'kanna.kashima.moe:443', auth: 'kanna', secure: true },
+    { name: 'Lavalink-V4', url: 'v4.lavalink.net:443', auth: 'youshallnotpass', secure: true },
     { name: 'Serenetia', url: 'lavalinkv4.serenetia.com:443', auth: 'https://seretia.link/discord', secure: true },
     { name: 'Jirayu', url: 'lavalink.jirayu.net:443', auth: 'youshallnotpass', secure: true }
 ], {
     moveOnDisconnect: false,
     resume: false,
     resumeTimeout: 30,
-    reconnectTries: 2,
+    reconnectTries: 3,
     restTimeout: 10000
 });
 
