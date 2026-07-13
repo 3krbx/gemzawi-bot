@@ -45,34 +45,46 @@ shoukaku.on('error', (name, error) => {
 shoukaku.on('ready', (name) => console.log(`Lavalink Node ${name} connected!`));
 shoukaku.on('disconnect', (name) => console.log(`Lavalink Node ${name} disconnected`));
 
-let voicePlayer = null;
-let queue = [];
-let isPlaying = false;
-let currentResourceFile = null;
-let currentPlaybackType = null;
+const serversData = new Map();
+
+function getServerData(guildId) {
+    if (!serversData.has(guildId)) {
+        serversData.set(guildId, {
+            voicePlayer: null,
+            queue: [],
+            isPlaying: false,
+            currentResourceFile: null,
+            currentPlaybackType: null
+        });
+    }
+    return serversData.get(guildId);
+}
 
 async function safeJoinVoiceChannel(message) {
+    const guildId = message.guild.id;
+    const server = getServerData(guildId);
+
     // If the bot is already in the same channel and we have a player, just return it
     const botMem = message.guild.members.me;
-    if (voicePlayer && botMem && botMem.voice.channelId === message.member.voice.channel.id) {
-        return voicePlayer;
+    if (server.voicePlayer && botMem && botMem.voice.channelId === message.member.voice.channel.id) {
+        return server.voicePlayer;
     }
 
     try {
         // If moving to a different channel or not connected
         return await shoukaku.joinVoiceChannel({
-            guildId: message.guild.id,
+            guildId: guildId,
             channelId: message.member.voice.channel.id,
             shardId: 0
         });
     } catch (error) {
         if (error.message && error.message.includes("existing connection")) {
-            console.log(`Connection exists for ${message.guild.id}, leaving and rejoining...`);
+            console.log(`Connection exists for ${guildId}, leaving and rejoining...`);
             try {
-                await shoukaku.leaveVoiceChannel(message.guild.id);
+                await shoukaku.leaveVoiceChannel(guildId);
                 await new Promise(r => setTimeout(r, 1000));
                 return await shoukaku.joinVoiceChannel({
-                    guildId: message.guild.id,
+                    guildId: guildId,
                     channelId: message.member.voice.channel.id,
                     shardId: 0
                 });
@@ -288,26 +300,28 @@ function egyptianizeText(text) {
     return text;
 }
 
-function cleanupCurrentResourceFile() {
-    if (currentResourceFile) {
+function cleanupCurrentResourceFile(guildId) {
+    const server = getServerData(guildId);
+    if (server.currentResourceFile) {
         try {
-            if (fs.existsSync(currentResourceFile.file)) fs.unlinkSync(currentResourceFile.file);
-            if (currentResourceFile.dir && fs.existsSync(currentResourceFile.dir)) {
-                const files = fs.readdirSync(currentResourceFile.dir);
+            if (fs.existsSync(server.currentResourceFile.file)) fs.unlinkSync(server.currentResourceFile.file);
+            if (server.currentResourceFile.dir && fs.existsSync(server.currentResourceFile.dir)) {
+                const files = fs.readdirSync(server.currentResourceFile.dir);
                 for (const file of files) {
-                    fs.unlinkSync(path.join(currentResourceFile.dir, file));
+                    fs.unlinkSync(path.join(server.currentResourceFile.dir, file));
                 }
-                fs.rmdirSync(currentResourceFile.dir);
+                fs.rmdirSync(server.currentResourceFile.dir);
             }
         } catch (e) {
             console.error("Error cleaning up:", e);
         }
-        currentResourceFile = null;
+        server.currentResourceFile = null;
     }
 }
 
 // دالة توليد وتشغيل الصوت
-async function generateAndPlayTTS(rawText) {
+async function generateAndPlayTTS(guildId, rawText) {
+    const server = getServerData(guildId);
     let text = rawText; // تم إلغاء تحويل الفرانكو ليقرأ البوت الحروف الإنجليزية بنطقها السليم
     text = addSmartPunctuation(text);  // إضافة الترقيم الذكي عشان الطلاقة
     text = egyptianizeText(text); // تشكيل الكلمات باللهجة المصرية
@@ -325,7 +339,7 @@ async function generateAndPlayTTS(rawText) {
         const result = await tts.toFile(reqDir, text);
         const actualFilePath = result.audioFilePath || filePath; 
         
-        currentResourceFile = { file: actualFilePath, dir: reqDir };
+        server.currentResourceFile = { file: actualFilePath, dir: reqDir };
         
         const port = process.env.PORT || 3000;
         const host = process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`;
@@ -353,22 +367,23 @@ async function generateAndPlayTTS(rawText) {
         }
         
         if (resolveResult && resolveResult.loadType === 'track') {
-            await voicePlayer.playTrack({ track: { encoded: resolveResult.data.encoded } });
+            await server.voicePlayer.playTrack({ track: { encoded: resolveResult.data.encoded } });
         } else {
             console.error("Lavalink failed to resolve TTS:", playUrl, resolveResult);
-            processNextInQueue();
+            processNextInQueue(guildId);
         }
     } catch (error) {
         console.error("TTS Error:", error);
-        processNextInQueue(); // في حالة خطأ، ننتقل للي بعده
+        processNextInQueue(guildId); // في حالة خطأ، ننتقل للي بعده
     } finally {
         tts.close();
     }
 }
 
-async function playMusic(item) {
+async function playMusic(guildId, item) {
+    const server = getServerData(guildId);
     try {
-        await voicePlayer.playTrack({ track: { encoded: item.trackEncoded } });
+        await server.voicePlayer.playTrack({ track: { encoded: item.trackEncoded } });
         
         const row = new ActionRowBuilder()
             .addComponents(
@@ -397,37 +412,41 @@ async function playMusic(item) {
     } catch (error) {
         console.error("Music Error:", error.message);
         item.message.channel.send(`❌ مقدرتش أشغل الأغنية دي: ${error.message.substring(0, 300)}`);
-        processNextInQueue();
+        processNextInQueue(guildId);
     }
 }
 
-function processNextInQueue() {
-    if (queue.length === 0) {
-        isPlaying = false;
-        currentPlaybackType = null;
+function processNextInQueue(guildId) {
+    const server = getServerData(guildId);
+    if (server.queue.length === 0) {
+        server.isPlaying = false;
+        server.currentPlaybackType = null;
         return;
     }
     
-    isPlaying = true;
-    const item = queue.shift();
-    currentPlaybackType = item.type;
+    server.isPlaying = true;
+    const item = server.queue.shift();
+    server.currentPlaybackType = item.type;
     
     if (item.type === 'tts') {
-        generateAndPlayTTS(item.text); 
+        generateAndPlayTTS(guildId, item.text); 
     } else if (item.type === 'music') {
-        playMusic(item);
+        playMusic(guildId, item);
     }
 }
 
 // التعامل مع السلاش كوماند والكونترول بانل
 client.on('interactionCreate', async interaction => {
     if (interaction.isButton()) {
+        const guildId = interaction.guild.id;
+        const server = getServerData(guildId);
+
         if (interaction.customId.startsWith('music_')) {
             if (!interaction.member.voice.channel) {
                 return interaction.reply({ content: 'لازم تكون في روم صوتي الأول عشان تتحكم!', ephemeral: true });
             }
             
-            if (!voicePlayer) {
+            if (!server.voicePlayer) {
                 return interaction.reply({ content: 'البوت مش في روم صوتي أصلاً!', ephemeral: true });
             }
             
@@ -438,30 +457,32 @@ client.on('interactionCreate', async interaction => {
             }
             
             if (interaction.customId === 'music_pause_resume') {
-                const isPaused = voicePlayer.paused;
-                await voicePlayer.pause(!isPaused);
+                const isPaused = server.voicePlayer.paused;
+                await server.voicePlayer.pause(!isPaused);
                 return interaction.reply({ content: isPaused ? '▶️ تم الاستئناف!' : '⏸️ تم الإيقاف المؤقت!', ephemeral: true });
             }
             
             if (interaction.customId === 'music_skip') {
-                if (currentPlaybackType !== 'music') {
+                if (server.currentPlaybackType !== 'music') {
                     return interaction.reply({ content: 'مفيش أغنية شغالة حالياً لتخطيها!', ephemeral: true });
                 }
-                await voicePlayer.stopTrack();
+                await server.voicePlayer.stopTrack();
                 return interaction.reply({ content: '⏭️ تم تخطي الأغنية!', ephemeral: true });
             }
             
             if (interaction.customId === 'music_stop') {
-                queue = [];
-                await voicePlayer.stopTrack();
+                server.queue = [];
+                server.isPlaying = false;
+                server.currentPlaybackType = null;
+                await server.voicePlayer.stopTrack();
                 return interaction.reply({ content: '🛑 تم إيقاف التشغيل ومسح الطابور!', ephemeral: true });
             }
             
             if (interaction.customId === 'music_queue') {
-                if (queue.length === 0) {
+                if (server.queue.length === 0) {
                     return interaction.reply({ content: 'الطابور فارغ حالياً!', ephemeral: true });
                 }
-                const queueList = queue.map((item, idx) => `${idx + 1}. **${item.title || 'كلام (TTS)'}**`).join('\n');
+                const queueList = server.queue.map((item, idx) => `${idx + 1}. **${item.title || 'كلام (TTS)'}**`).join('\n');
                 return interaction.reply({ content: `📜 **طابور التشغيل:**\n${queueList.substring(0, 1900)}`, ephemeral: true });
             }
         }
@@ -719,10 +740,13 @@ __بناءً على الصلاحيات الممنوحة لنا، ولأن الم
 });
 
 client.on('messageCreate', async message => {
-    if (message.author.bot) return;
+    if (message.author.bot || !message.guild) return;
 
     // لو المستخدم في البلاك ليست، نتجاهله تماماً
     if (BLACKLIST.includes(message.author.id)) return;
+
+    const guildId = message.guild.id;
+    const server = getServerData(guildId);
 
     // كوماند دخول الروم
     if (message.content === '!join') {
@@ -731,46 +755,46 @@ client.on('messageCreate', async message => {
             
             // تحقق لو البوت موجود أصلاً في نفس الروم
             const botVoiceChannelId = message.guild.members.me?.voice?.channelId;
-            if (voicePlayer && botVoiceChannelId === message.member.voice.channel.id) {
+            if (server.voicePlayer && botVoiceChannelId === message.member.voice.channel.id) {
                 return message.reply('أنا معاك في الروم بالفعل! 🎤');
             }
 
-            if (!voicePlayer) {
+            if (!server.voicePlayer) {
                 isNewPlayer = true;
             }
             
-            voicePlayer = await safeJoinVoiceChannel(message);
-            if (!voicePlayer) {
+            server.voicePlayer = await safeJoinVoiceChannel(message);
+            if (!server.voicePlayer) {
                 return message.reply('❌ حصلت مشكلة وأنا بحاول أدخل الروم! (ممكن سيرفر الصوت فيه مشكلة)');
             }
             
             if (isNewPlayer) {
-                voicePlayer.on('end', (data) => {
+                server.voicePlayer.on('end', (data) => {
                     if (data.reason === 'finished' || data.reason === 'stopped') {
-                        cleanupCurrentResourceFile();
-                        isPlaying = false;
-                        processNextInQueue();
+                        cleanupCurrentResourceFile(guildId);
+                        server.isPlaying = false;
+                        processNextInQueue(guildId);
                     }
                 });
-                voicePlayer.on('exception', (error) => {
+                server.voicePlayer.on('exception', (error) => {
                     console.error("Lavalink Player Exception:", error);
-                    cleanupCurrentResourceFile();
-                    isPlaying = false;
-                    processNextInQueue();
+                    cleanupCurrentResourceFile(guildId);
+                    server.isPlaying = false;
+                    processNextInQueue(guildId);
                 });
-                voicePlayer.on('stuck', () => {
+                server.voicePlayer.on('stuck', () => {
                     console.warn("Lavalink Player Stuck");
-                    cleanupCurrentResourceFile();
-                    isPlaying = false;
-                    processNextInQueue();
+                    cleanupCurrentResourceFile(guildId);
+                    server.isPlaying = false;
+                    processNextInQueue(guildId);
                 });
             }
             
             message.reply('دخلت الروم الصوتي! 🎤');
             
-            queue.push({ type: 'tts', text: "السَلامُ عَلَيْكُمْ" });
-            if (!isPlaying) {
-                processNextInQueue();
+            server.queue.push({ type: 'tts', text: "السَلامُ عَلَيْكُمْ" });
+            if (!server.isPlaying) {
+                processNextInQueue(guildId);
             }
         } else {
             message.reply('لازم تدخل روم صوتي الأول!');
@@ -779,7 +803,7 @@ client.on('messageCreate', async message => {
 
     // كوماند الكلام
     if (message.content.startsWith('!say ')) {
-        if (!voicePlayer) {
+        if (!server.voicePlayer) {
             return message.reply('لازم تدخلني الروم الأول باستخدام كوماند !join');
         }
 
@@ -794,17 +818,17 @@ client.on('messageCreate', async message => {
         message.react('🗣️').catch(()=>{});
         
         // نظام المقاطعة: وقف الأغاني وشغل الكلام
-        queue = queue.filter(item => item.type === 'tts');
-        queue.push({ type: 'tts', text });
+        server.queue = server.queue.filter(item => item.type === 'tts');
+        server.queue.push({ type: 'tts', text });
         
-        if (currentPlaybackType === 'music') {
-            await voicePlayer.stopTrack(); 
-        } else if (!isPlaying) {
-            processNextInQueue();
-        } else if (voicePlayer && !voicePlayer.track) {
+        if (server.currentPlaybackType === 'music') {
+            await server.voicePlayer.stopTrack(); 
+        } else if (!server.isPlaying) {
+            processNextInQueue(guildId);
+        } else if (server.voicePlayer && !server.voicePlayer.track) {
             // حالة التعليق: لو البوت بيقول إنه شغال بس مفيش تراك بيتلعب فعلياً
-            isPlaying = false;
-            processNextInQueue();
+            server.isPlaying = false;
+            processNextInQueue(guildId);
         }
     }
 
@@ -815,34 +839,34 @@ client.on('messageCreate', async message => {
         }
         
         let isNewPlayer = false;
-        if (!voicePlayer) {
+        if (!server.voicePlayer) {
             isNewPlayer = true;
         }
         
-        voicePlayer = await safeJoinVoiceChannel(message);
-        if (!voicePlayer) {
+        server.voicePlayer = await safeJoinVoiceChannel(message);
+        if (!server.voicePlayer) {
             return message.reply('❌ حصلت مشكلة وأنا بحاول أدخل الروم! (ممكن سيرفر الصوت فيه مشكلة)');
         }
         
         if (isNewPlayer) {
-            voicePlayer.on('end', (data) => {
+            server.voicePlayer.on('end', (data) => {
                 if (data.reason === 'finished' || data.reason === 'stopped') {
-                    cleanupCurrentResourceFile();
-                    isPlaying = false;
-                    processNextInQueue();
+                    cleanupCurrentResourceFile(guildId);
+                    server.isPlaying = false;
+                    processNextInQueue(guildId);
                 }
             });
-            voicePlayer.on('exception', (error) => {
+            server.voicePlayer.on('exception', (error) => {
                 console.error("Lavalink Player Exception:", error);
-                cleanupCurrentResourceFile();
-                isPlaying = false;
-                processNextInQueue();
+                cleanupCurrentResourceFile(guildId);
+                server.isPlaying = false;
+                processNextInQueue(guildId);
             });
-            voicePlayer.on('stuck', () => {
+            server.voicePlayer.on('stuck', () => {
                 console.warn("Lavalink Player Stuck");
-                cleanupCurrentResourceFile();
-                isPlaying = false;
-                processNextInQueue();
+                cleanupCurrentResourceFile(guildId);
+                server.isPlaying = false;
+                processNextInQueue(guildId);
             });
         }
 
@@ -887,7 +911,7 @@ client.on('messageCreate', async message => {
             
             for (const track of resolvedTracks) {
                 if (track) {
-                    queue.push({
+                    server.queue.push({
                         type: 'music',
                         url: track.info.uri,
                         title: track.info.title,
@@ -908,8 +932,8 @@ client.on('messageCreate', async message => {
                 message.reply(`✅ تم إضافة **${addedTracks.length} أغنية** للطابور:\n${addedTracks.map((title, idx) => `${idx + 1}. **${title}**`).join('\n')}`);
             }
             
-            if (!isPlaying) {
-                processNextInQueue();
+            if (!server.isPlaying) {
+                processNextInQueue(guildId);
             }
         } catch (err) {
             console.error("Play error:", err);
@@ -919,16 +943,16 @@ client.on('messageCreate', async message => {
 
     // كوماند تخطي الأغنية
     if (message.content === '!skip') {
-        if (!voicePlayer) return;
-        if (currentPlaybackType !== 'music') return message.reply('مفيش أغنية شغالة عشان أتخطاها!');
+        if (!server.voicePlayer) return;
+        if (server.currentPlaybackType !== 'music') return message.reply('مفيش أغنية شغالة عشان أتخطاها!');
         
         message.reply('⏭️ تم التخطي!');
-        await voicePlayer.stopTrack();
+        await server.voicePlayer.stopTrack();
     }
     
     // كوماند الإيقاف
     if (message.content === '!stop') {
-        if (!voicePlayer) return;
+        if (!server.voicePlayer) return;
         
         const botVoiceChannelId = message.guild.members.me?.voice?.channelId;
         const memberVoiceChannelId = message.member.voice?.channelId;
@@ -937,21 +961,21 @@ client.on('messageCreate', async message => {
             return message.reply('عشان توقفني لازم تكون معايا في نفس الروم الصوتي!');
         }
 
-        queue = [];
-        isPlaying = false;
-        currentPlaybackType = null;
-        await voicePlayer.stopTrack();
+        server.queue = [];
+        server.isPlaying = false;
+        server.currentPlaybackType = null;
+        await server.voicePlayer.stopTrack();
         message.react('🛑').catch(()=>{});
         message.reply('سكت خلاص ومسحت كل الأغاني والكلام اللي في الطابور!');
     }
 
     // كوماند الخروج
     if (message.content === '!leave') {
-        if (voicePlayer) {
-            queue = [];
-            await voicePlayer.stopTrack();
-            await shoukaku.leaveVoiceChannel(message.guild.id);
-            voicePlayer = null;
+        if (server.voicePlayer) {
+            server.queue = [];
+            await server.voicePlayer.stopTrack();
+            await shoukaku.leaveVoiceChannel(guildId);
+            server.voicePlayer = null;
             message.reply('خرجت من الروم الصوتي! 👋');
         } else {
             message.reply('أنا مش في روم صوتي أصلاً!');
